@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NSE 200 · 7-Factor Portfolio | 23 Apr 2026 19:05</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+:root{
+  --bg:#0F1117;--card:#1A1D27;--card2:#20253A;
+  --border:rgba(255,255,255,0.08);--text:#E8EAF0;--sub:#8B90A0;
+  --jade:#1D9E75;--amber:#EF9F27;--rust:#D85A30;--blue:#378ADD;
+  --r5:#1D9E75;--r4:rgba(29,158,117,.55);--r3:#4A5568;--r2:#EF9F27;--r1:#D85A30;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+      background:var(--bg);color:var(--text);font-size:13px;line-height:1.5}
+.mono{font-family:'JetBrains Mono','Fira Code','Courier New',monospace}
+a{color:var(--blue);text-decoration:none}
+
+/* Layout */
+.wrap{max-width:1400px;margin:0 auto;padding:16px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.grid6{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+@media(max-width:900px){.grid2,.grid3{grid-template-columns:1fr}}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px}
+.card-sm{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+
+/* KPI */
+.kpi-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--sub);margin-bottom:4px}
+.kpi-value{font-size:22px;font-weight:600;font-family:'JetBrains Mono','Fira Code',monospace;line-height:1}
+.kpi-sub{font-size:11px;color:var(--sub);margin-top:3px}
+.pos{color:var(--jade)}.neg{color:var(--rust)}.neu{color:var(--amber)}
+
+/* Section headers */
+.section{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;
+          color:var(--sub);margin:24px 0 10px;padding-left:2px}
+
+/* Tabs */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:18px;padding-bottom:0}
+.tab{padding:8px 16px;font-size:12px;font-weight:500;cursor:pointer;
+      border-radius:8px 8px 0 0;border:1px solid transparent;
+      border-bottom:none;color:var(--sub);background:transparent;transition:all .15s}
+.tab.active{background:var(--card);color:var(--text);border-color:var(--border);
+             border-bottom-color:var(--card)}
+.tab-content{display:none}.tab-content.active{display:block}
+
+/* Rank pips */
+.pip{display:inline-flex;align-items:center;justify-content:center;
+      width:22px;height:22px;border-radius:4px;font-size:11px;font-weight:700;
+      color:white;font-family:'JetBrains Mono',monospace}
+.r5{background:var(--r5)}.r4{background:var(--r4)}
+.r3{background:var(--r3)}.r2{background:var(--r2)}.r1{background:var(--r1)}
+
+/* Tables */
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{color:var(--sub);font-weight:500;text-align:left;padding:7px 10px;
+         border-bottom:1px solid var(--border);font-size:11px;
+         cursor:pointer;user-select:none;white-space:nowrap}
+.tbl th:hover{color:var(--text)}
+.tbl td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:middle}
+.tbl tr:hover td{background:rgba(255,255,255,.03)}
+.tbl tr.in-port td{background:rgba(29,158,117,.06)}
+
+/* Search */
+.search-row{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+.search-input{flex:1;max-width:280px;padding:6px 12px;
+               background:var(--card2);border:1px solid var(--border);
+               border-radius:8px;color:var(--text);font-size:12px}
+.search-input::placeholder{color:var(--sub)}
+.badge{display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:600}
+.badge-in{background:rgba(29,158,117,.2);color:var(--jade)}
+.badge-pdf{background:rgba(55,138,221,.2);color:var(--blue)}
+
+/* Chart containers */
+.chart-wrap{position:relative}
+
+/* Scrollable table wrapper */
+.tbl-scroll{overflow-x:auto;max-height:480px;overflow-y:auto}
+.tbl-scroll::-webkit-scrollbar{width:4px;height:4px}
+.tbl-scroll::-webkit-scrollbar-track{background:var(--card2)}
+.tbl-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* Heatmap */
+.heatmap-cell{width:28px;height:28px;border-radius:4px;display:inline-flex;
+               align-items:center;justify-content:center;
+               font-size:11px;font-weight:700;color:white;cursor:default}
+
+/* Legend */
+.legend-row{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;align-items:center}
+.legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:5px}
+.legend-sq{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:5px}
+
+/* Progress bar */
+.prog-bar{height:6px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,.08)}
+.prog-fill{height:100%;border-radius:3px;transition:width .5s}
+
+/* Alerts */
+.alert{padding:10px 14px;border-radius:8px;font-size:12px;margin-bottom:12px;
+        border-left:3px solid}
+.alert-ok{background:rgba(29,158,117,.1);border-color:var(--jade);color:var(--jade)}
+.alert-warn{background:rgba(239,159,39,.1);border-color:var(--amber);color:var(--amber)}
+
+/* Sticky header for tables */
+.sticky-head th{position:sticky;top:0;background:var(--card);z-index:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ── HEADER ── -->
+<div style="display:flex;align-items:flex-start;justify-content:space-between;
+            margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+  <div>
+    <div style="font-size:11px;color:var(--sub);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">
+      NSE 200 · Quantitative Factor Investing
+    </div>
+    <h1 style="font-size:26px;font-weight:700;letter-spacing:-.5px">
+      7-Factor Portfolio Dashboard
+    </h1>
+    <div style="font-size:12px;color:var(--sub);margin-top:6px">
+      Backtest: Jan 2020 – Apr 2026 &nbsp;·&nbsp;
+      Universe: 167 stocks &nbsp;·&nbsp;
+      Portfolio: 25 stocks (equal weight) &nbsp;·&nbsp;
+      Run: 23 Apr 2026 19:05
+    </div>
+  </div>
+  <div style="text-align:right">
+    <div class="badge badge-pdf" style="font-size:11px;padding:4px 10px">
+      PDF Target: CAGR ~17.2% · DD ~-18.0% · Sharpe ~0.78
+    </div>
+  </div>
+</div>
+
+<!-- ── KPI CARDS ── -->
+<div class="section">Performance Summary</div>
+<div class="grid6" style="margin-bottom:20px">
+  <div class="card-sm">
+    <div class="kpi-label">Portfolio CAGR</div>
+    <div class="kpi-value mono pos">+24.5%</div>
+    <div class="kpi-sub">Nifty 50: +11.9%</div>
+  </div>
+  <div class="card-sm">
+    <div class="kpi-label">Alpha vs Nifty</div>
+    <div class="kpi-value mono pos">+12.6%</div>
+    <div class="kpi-sub">annualised outperformance</div>
+  </div>
+  <div class="card-sm">
+    <div class="kpi-label">Max Drawdown</div>
+    <div class="kpi-value mono neg">-18.1%</div>
+    <div class="kpi-sub">Nifty 50: -28.1%</div>
+  </div>
+  <div class="card-sm">
+    <div class="kpi-label">Sharpe Ratio</div>
+    <div class="kpi-value mono">0.24</div>
+    <div class="kpi-sub">Sortino: 0.77</div>
+  </div>
+  <div class="card-sm">
+    <div class="kpi-label">Calmar Ratio</div>
+    <div class="kpi-value mono pos">1.36</div>
+    <div class="kpi-sub">CAGR / |Max DD|</div>
+  </div>
+  <div class="card-sm">
+    <div class="kpi-label">Final Value</div>
+    <div class="kpi-value mono pos" style="font-size:17px">₹1,968,739</div>
+    <div class="kpi-sub">Total return: +293.8%</div>
+  </div>
+</div>
+
+<!-- ── SECONDARY KPIs ── -->
+<div class="grid4" style="margin-bottom:24px">
+  <div class="card-sm" style="display:flex;align-items:center;gap:12px">
+    <div style="flex:1">
+      <div class="kpi-label">Annual Volatility</div>
+      <div class="mono" style="font-size:16px;font-weight:600">+75.4%</div>
+    </div>
+    <div style="font-size:24px;opacity:.3">📊</div>
+  </div>
+  <div class="card-sm" style="display:flex;align-items:center;gap:12px">
+    <div style="flex:1">
+      <div class="kpi-label">Monthly Win Rate</div>
+      <div class="mono" style="font-size:16px;font-weight:600">58%</div>
+    </div>
+    <div style="font-size:24px;opacity:.3">🎯</div>
+  </div>
+  <div class="card-sm" style="display:flex;align-items:center;gap:12px">
+    <div style="flex:1">
+      <div class="kpi-label">Portfolio Size</div>
+      <div class="mono" style="font-size:16px;font-weight:600">25 of 167</div>
+    </div>
+    <div style="font-size:24px;opacity:.3">📋</div>
+  </div>
+</div>
+
+<!-- ── TABS ── -->
+<div class="tabs">
+  <div class="tab active" onclick="switchTab(event,'t-equity')">📈 Equity Curve</div>
+  <div class="tab" onclick="switchTab(event,'t-annual')">📅 Annual Returns</div>
+  <div class="tab" onclick="switchTab(event,'t-drawdown')">📉 Drawdown</div>
+  <div class="tab" onclick="switchTab(event,'t-heatmap')">🌡️ Factor Heatmap</div>
+  <div class="tab" onclick="switchTab(event,'t-scores')">📊 Score Distribution</div>
+  <div class="tab" onclick="switchTab(event,'t-attr')">🔬 Attribution</div>
+  <div class="tab" onclick="switchTab(event,'t-rebal')">🔄 Rebalance Log</div>
+  <div class="tab" onclick="switchTab(event,'t-universe')">🌐 Full Universe</div>
+</div>
+
+<!-- TAB: EQUITY CURVE -->
+<div id="t-equity" class="tab-content active">
+  <div class="card">
+    <div class="section" style="margin-top:0">Equity Curve · Base = 100 · Jan 2020 – Apr 2026</div>
+    <div class="legend-row" style="margin-bottom:12px">
+      <span><span class="legend-dot" style="background:#378ADD"></span>7-Factor Portfolio</span>
+      <span><span class="legend-dot" style="background:#888780;opacity:.6"></span>Nifty 50</span>
+    </div>
+    <div class="chart-wrap" style="height:360px">
+      <canvas id="equityChart" role="img" aria-label="Equity curve comparing portfolio vs Nifty 50"></canvas>
+    </div>
+    <div style="margin-top:12px;font-size:11px;color:var(--sub)">
+      Both curves start at 100 (₹5,00,000). Portfolio outperforming Nifty 50 by +12.6%/yr.
+    </div>
+  </div>
+</div>
+
+<!-- TAB: ANNUAL RETURNS -->
+<div id="t-annual" class="tab-content">
+  <div class="card">
+    <div class="section" style="margin-top:0">Annual Returns · Portfolio vs Nifty 50 · 2020 – 2026</div>
+    <div class="chart-wrap" style="height:340px">
+      <canvas id="annualChart" role="img" aria-label="Annual returns comparison 2020 to 2026"></canvas>
+    </div>
+    <div class="legend-row" style="margin-top:14px">
+      <span><span class="legend-sq" style="background:#378ADD"></span>Portfolio</span>
+      <span><span class="legend-sq" style="background:rgba(136,135,128,.4);border:1px solid #888"></span>Nifty 50</span>
+    </div>
+  </div>
+</div>
+
+<!-- TAB: DRAWDOWN -->
+<div id="t-drawdown" class="tab-content">
+  <div class="card">
+    <div class="section" style="margin-top:0">Drawdown (Underwater) Chart · % Below Previous Peak</div>
+    <div class="chart-wrap" style="height:320px">
+      <canvas id="drawdownChart" role="img" aria-label="Drawdown chart showing percentage below previous peak"></canvas>
+    </div>
+    <div style="margin-top:12px;font-size:11px;color:var(--sub)">
+      Max Drawdown: -18.1%.
+      The chart shows how far the portfolio is below its all-time high at each point.
+      Zero means at or above the previous peak.
+    </div>
+  </div>
+</div>
+
+<!-- TAB: FACTOR HEATMAP -->
+<div id="t-heatmap" class="tab-content">
+  <div class="card">
+    <div class="section" style="margin-top:0">Factor Score Heatmap · Top 25 Portfolio Stocks</div>
+    <div class="legend-row" style="margin-bottom:14px">
+      <span><span class="pip r5">5</span> Top 20%</span>
+      <span><span class="pip r4">4</span> Top 40%</span>
+      <span><span class="pip r3">3</span> Middle</span>
+      <span><span class="pip r2">2</span> Bottom 40%</span>
+      <span><span class="pip r1">1</span> Bottom 20%</span>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>#</th><th>Stock</th><th>Score</th>
+            <th title="Momentum">Mom</th>
+            <th title="Quality">Qua</th>
+            <th title="Value">Val</th>
+            <th title="Size">Siz</th>
+            <th title="Beta">Bet</th>
+            <th title="Investment">Inv</th>
+            <th title="Yield">Yld</th>
+            <th>Bar</th>
+          </tr>
+        </thead>
+        <tbody id="heatmapBody"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:14px;font-size:11px;color:var(--sub)">
+      Factors: Momentum (30%) · Quality (20%) · Value (15%) · Size (12%) · Beta (10%) · Investment (7%) · Yield (6%)
+    </div>
+  </div>
+</div>
+
+<!-- TAB: SCORE DISTRIBUTION -->
+<div id="t-scores" class="tab-content">
+  <div class="grid2">
+    <div class="card">
+      <div class="section" style="margin-top:0">Score Distribution · All 167 Stocks</div>
+      <div class="chart-wrap" style="height:300px">
+        <canvas id="histChart" role="img" aria-label="Histogram of composite factor scores for all universe stocks"></canvas>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:var(--sub)">
+        <span style="color:var(--jade)">■</span> Portfolio (score ≥ cutoff) &nbsp;
+        <span style="color:#4A7A9B">■</span> Not selected<br>
+        Score mean ≈ 3.0 (guaranteed by quintile ranking · range 1.0 – 5.0)
+      </div>
+    </div>
+    <div class="card">
+      <div class="section" style="margin-top:0">Factor Weight vs Alpha Attribution</div>
+      <div class="chart-wrap" style="height:300px">
+        <canvas id="attrChart" role="img" aria-label="Bar chart comparing factor weight with alpha attribution"></canvas>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:var(--sub)">
+        Even though Momentum has 30% weight, it contributes ~47.5% of alpha
+        because price persistence is the strongest signal in Indian markets.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TAB: ATTRIBUTION -->
+<div id="t-attr" class="tab-content">
+  <div class="grid2">
+    <div class="card">
+      <div class="section" style="margin-top:0">Return Attribution · Estimated Alpha Split</div>
+      <div class="chart-wrap" style="height:300px">
+        <canvas id="attrPie" role="img" aria-label="Pie chart of factor alpha attribution"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <div class="section" style="margin-top:0">Factor Correlation (Cross-Factor Diversification)</div>
+      <div id="corrTable" style="font-size:12px;overflow-x:auto"></div>
+      <div style="margin-top:10px;font-size:11px;color:var(--sub)">
+        Negative / near-zero correlations = genuine diversification.
+        Momentum and Value are negatively correlated — key hedge.
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="section" style="margin-top:0">Factor Performance by Year (Estimated Regime Analysis)</div>
+    <div class="chart-wrap" style="height:260px">
+      <canvas id="regimeChart" role="img" aria-label="Stacked bar chart of factor contributions by year 2020 to 2025"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- TAB: REBALANCE LOG -->
+<div id="t-rebal" class="tab-content">
+  <div class="card">
+    <div class="section" style="margin-top:0">Rebalance History · Semi-Annual (June + December)</div>
+    <div class="tbl-scroll">
+      <table class="tbl sticky-head">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Portfolio Value</th>
+            <th>Period Return</th>
+            <th>Nifty Return</th>
+            <th>Alpha</th>
+            <th>Turnover</th>
+            <th>Stocks In</th>
+            <th>Stocks Out</th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody id="rebalBody"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:12px;font-size:11px;color:var(--sub)">
+      Each row = one rebalancing event. Period return covers from this rebalance to the next.
+      Turnover = fraction of portfolio that changed. Cost = brokerage + STT + impact.
+    </div>
+  </div>
+</div>
+
+<!-- TAB: FULL UNIVERSE -->
+<div id="t-universe" class="tab-content">
+  <div class="card">
+    <div class="section" style="margin-top:0">Full Universe Ranking · All 167 Stocks</div>
+    <div class="search-row">
+      <input class="search-input" type="text" id="univSearch"
+             placeholder="Search stock…" oninput="filterUniverse()">
+      <span style="font-size:11px;color:var(--sub)" id="univCount">
+        167 stocks
+      </span>
+      <label style="font-size:11px;color:var(--sub);display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="showPortOnly" onchange="filterUniverse()"> Portfolio only
+      </label>
+    </div>
+    <div class="tbl-scroll">
+      <table class="tbl sticky-head">
+        <thead>
+          <tr>
+            <th onclick="sortUniverse('rank')"># ▼</th>
+            <th onclick="sortUniverse('ticker')">Stock</th>
+            <th onclick="sortUniverse('score')">Score</th>
+            <th>Mom</th><th>Qua</th><th>Val</th>
+            <th>Siz</th><th>Bet</th><th>Inv</th><th>Yld</th>
+          </tr>
+        </thead>
+        <tbody id="univBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+</div><!-- /wrap -->
+
+<script>
+// ─── DATA ────────────────────────────────────────────────────────────────────
+const D = {"equity_labels": ["2020-01-01", "2020-12-01", "2021-06-01", "2021-12-01", "2022-06-01", "2022-12-01", "2023-06-01", "2023-12-01", "2024-06-01", "2024-12-01", "2025-06-01", "2025-12-01", "2026-04-01"], "equity_port": [100.0, 141.78, 182.91, 222.35, 182.17, 216.88, 229.8, 346.43, 462.59, 431.8, 409.52, 407.48, 393.75], "equity_nifty": [100.0, 116.88, 131.43, 145.08, 131.92, 151.36, 160.42, 181.67, 200.72, 197.66, 213.32, 218.44, 202.08], "ann_labels": ["2020", "2021", "2022", "2023", "2024", "2025"], "ann_port": [41.8, 21.6, 19.1, 50.8, -6.7, -0.5], "ann_nifty": [16.9, 27.3, 4.4, 23.0, 8.8, 11.2], "dd_labels": ["2020-01-01", "2020-12-01", "2021-06-01", "2021-12-01", "2022-06-01", "2022-12-01", "2023-06-01", "2023-12-01", "2024-06-01", "2024-12-01", "2025-06-01", "2025-12-01", "2026-04-01"], "dd_values": [0.0, 0.0, 0.0, 0.0, -18.07, -2.46, 0.0, 0.0, 0.0, -6.66, -11.47, -11.91, -14.88], "heatmap_data": [{"ticker": "MOTHERSON", "score": 4.3, "ranks": [5, 5, 4, 2, 5, 4, 3]}, {"ticker": "SAIL", "score": 4.26, "ranks": [5, 3, 5, 4, 4, 5, 3]}, {"ticker": "HEROMOTOCO", "score": 4.17, "ranks": [5, 5, 3, 3, 4, 4, 3]}, {"ticker": "APOLLOTYRE", "score": 3.98, "ranks": [3, 4, 5, 5, 4, 5, 3]}, {"ticker": "IOC", "score": 3.92, "ranks": [5, 2, 5, 2, 5, 5, 3]}, {"ticker": "FORTIS", "score": 3.91, "ranks": [5, 4, 2, 4, 3, 5, 3]}, {"ticker": "TATASTEEL", "score": 3.87, "ranks": [5, 4, 4, 2, 2, 5, 3]}, {"ticker": "TIMKEN", "score": 3.82, "ranks": [5, 4, 2, 5, 3, 2, 3]}, {"ticker": "PVRINOX", "score": 3.78, "ranks": [4, 3, 5, 5, 1, 5, 3]}, {"ticker": "NATIONALUM", "score": 3.73, "ranks": [5, 5, 3, 3, 1, 2, 3]}, {"ticker": "DELHIVERY", "score": 3.73, "ranks": [5, 2, 4, 5, 1, 5, 3]}, {"ticker": "RAMCOCEM", "score": 3.73, "ranks": [4, 3, 4, 5, 2, 5, 3]}, {"ticker": "ALKEM", "score": 3.72, "ranks": [4, 5, 3, 4, 2, 3, 3]}, {"ticker": "CANBK", "score": 3.7, "ranks": [5, 1, 5, 3, 5, 3, 3]}, {"ticker": "PNB", "score": 3.63, "ranks": [5, 1, 5, 3, 5, 2, 3]}, {"ticker": "ACC", "score": 3.61, "ranks": [2, 4, 5, 5, 4, 4, 3]}, {"ticker": "BANKBARODA", "score": 3.58, "ranks": [5, 1, 5, 2, 5, 3, 3]}, {"ticker": "JKCEMENT", "score": 3.57, "ranks": [4, 5, 2, 4, 2, 3, 3]}, {"ticker": "BPCL", "score": 3.55, "ranks": [4, 2, 5, 2, 5, 4, 3]}, {"ticker": "OIL", "score": 3.52, "ranks": [3, 3, 5, 4, 4, 3, 3]}, {"ticker": "FEDERALBNK", "score": 3.52, "ranks": [5, 1, 5, 4, 2, 3, 3]}, {"ticker": "HINDALCO", "score": 3.51, "ranks": [5, 3, 5, 2, 1, 2, 3]}, {"ticker": "NMDC", "score": 3.5, "ranks": [4, 4, 4, 4, 1, 2, 3]}, {"ticker": "CDSL", "score": 3.5, "ranks": [4, 4, 1, 5, 5, 1, 3]}, {"ticker": "TATACOMM", "score": 3.49, "ranks": [3, 5, 1, 4, 5, 4, 3]}], "factors": ["Momentum", "Quality", "Value", "Size", "Beta", "Invest", "Yield"], "hist_labels": ["1.74", "1.87", "2.00", "2.12", "2.25", "2.38", "2.51", "2.64", "2.76", "2.89", "3.02", "3.15", "3.28", "3.40", "3.53", "3.66", "3.79", "3.92", "4.04", "4.17"], "hist_counts": [2, 0, 2, 4, 8, 8, 16, 18, 15, 14, 14, 16, 15, 16, 5, 6, 3, 2, 1, 2], "hist_colors": ["#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#4A7A9B", "#1D9E75", "#1D9E75", "#1D9E75", "#1D9E75", "#1D9E75", "#1D9E75"], "universe_rows": [{"rank": 1, "ticker": "MOTHERSON", "score": 4.3, "in_port": true, "ranks": [5, 5, 4, 2, 5, 4, 3]}, {"rank": 2, "ticker": "SAIL", "score": 4.26, "in_port": true, "ranks": [5, 3, 5, 4, 4, 5, 3]}, {"rank": 3, "ticker": "HEROMOTOCO", "score": 4.17, "in_port": true, "ranks": [5, 5, 3, 3, 4, 4, 3]}, {"rank": 4, "ticker": "APOLLOTYRE", "score": 3.98, "in_port": true, "ranks": [3, 4, 5, 5, 4, 5, 3]}, {"rank": 5, "ticker": "IOC", "score": 3.92, "in_port": true, "ranks": [5, 2, 5, 2, 5, 5, 3]}, {"rank": 6, "ticker": "FORTIS", "score": 3.91, "in_port": true, "ranks": [5, 4, 2, 4, 3, 5, 3]}, {"rank": 7, "ticker": "TATASTEEL", "score": 3.87, "in_port": true, "ranks": [5, 4, 4, 2, 2, 5, 3]}, {"rank": 8, "ticker": "TIMKEN", "score": 3.82, "in_port": true, "ranks": [5, 4, 2, 5, 3, 2, 3]}, {"rank": 9, "ticker": "PVRINOX", "score": 3.78, "in_port": true, "ranks": [4, 3, 5, 5, 1, 5, 3]}, {"rank": 10, "ticker": "NATIONALUM", "score": 3.73, "in_port": true, "ranks": [5, 5, 3, 3, 1, 2, 3]}, {"rank": 11, "ticker": "DELHIVERY", "score": 3.73, "in_port": true, "ranks": [5, 2, 4, 5, 1, 5, 3]}, {"rank": 12, "ticker": "RAMCOCEM", "score": 3.73, "in_port": true, "ranks": [4, 3, 4, 5, 2, 5, 3]}, {"rank": 13, "ticker": "ALKEM", "score": 3.72, "in_port": true, "ranks": [4, 5, 3, 4, 2, 3, 3]}, {"rank": 14, "ticker": "CANBK", "score": 3.7, "in_port": true, "ranks": [5, 1, 5, 3, 5, 3, 3]}, {"rank": 15, "ticker": "PNB", "score": 3.63, "in_port": true, "ranks": [5, 1, 5, 3, 5, 2, 3]}, {"rank": 16, "ticker": "ACC", "score": 3.61, "in_port": true, "ranks": [2, 4, 5, 5, 4, 4, 3]}, {"rank": 17, "ticker": "BANKBARODA", "score": 3.58, "in_port": true, "ranks": [5, 1, 5, 2, 5, 3, 3]}, {"rank": 18, "ticker": "JKCEMENT", "score": 3.57, "in_port": true, "ranks": [4, 5, 2, 4, 2, 3, 3]}, {"rank": 19, "ticker": "BPCL", "score": 3.55, "in_port": true, "ranks": [4, 2, 5, 2, 5, 4, 3]}, {"rank": 20, "ticker": "OIL", "score": 3.52, "in_port": true, "ranks": [3, 3, 5, 4, 4, 3, 3]}, {"rank": 21, "ticker": "FEDERALBNK", "score": 3.52, "in_port": true, "ranks": [5, 1, 5, 4, 2, 3, 3]}, {"rank": 22, "ticker": "HINDALCO", "score": 3.51, "in_port": true, "ranks": [5, 3, 5, 2, 1, 2, 3]}, {"rank": 23, "ticker": "NMDC", "score": 3.5, "in_port": true, "ranks": [4, 4, 4, 4, 1, 2, 3]}, {"rank": 24, "ticker": "CDSL", "score": 3.5, "in_port": true, "ranks": [4, 4, 1, 5, 5, 1, 3]}, {"rank": 25, "ticker": "TATACOMM", "score": 3.49, "in_port": true, "ranks": [3, 5, 1, 4, 5, 4, 3]}, {"rank": 26, "ticker": "CHAMBLFERT", "score": 3.48, "in_port": false, "ranks": [1, 5, 5, 5, 3, 5, 3]}, {"rank": 27, "ticker": "ZEEL", "score": 3.48, "in_port": false, "ranks": [2, 3, 5, 5, 4, 5, 3]}, {"rank": 28, "ticker": "AARTIIND", "score": 3.46, "in_port": false, "ranks": [3, 2, 4, 5, 5, 4, 3]}, {"rank": 29, "ticker": "MPHASIS", "score": 3.46, "in_port": false, "ranks": [3, 3, 3, 4, 5, 5, 3]}, {"rank": 30, "ticker": "LT", "score": 3.46, "in_port": false, "ranks": [5, 3, 3, 1, 4, 3, 3]}, {"rank": 31, "ticker": "IDFCFIRSTB", "score": 3.45, "in_port": false, "ranks": [4, 1, 5, 4, 5, 2, 3]}, {"rank": 32, "ticker": "PRESTIGE", "score": 3.43, "in_port": false, "ranks": [4, 2, 4, 4, 5, 1, 3]}, {"rank": 33, "ticker": "EXIDEIND", "score": 3.42, "in_port": false, "ranks": [3, 3, 4, 5, 4, 2, 3]}, {"rank": 34, "ticker": "BANDHANBNK", "score": 3.41, "in_port": false, "ranks": [3, 1, 5, 5, 5, 4, 3]}, {"rank": 35, "ticker": "ABCAPITAL", "score": 3.41, "in_port": false, "ranks": [5, 1, 4, 3, 5, 1, 3]}, {"rank": 36, "ticker": "SCHAEFFLER", "score": 3.4, "in_port": false, "ranks": [4, 4, 2, 4, 3, 2, 3]}, {"rank": 37, "ticker": "CANFINHOME", "score": 3.39, "in_port": false, "ranks": [4, 1, 4, 5, 4, 3, 3]}, {"rank": 38, "ticker": "LTIM", "score": 3.38, "in_port": false, "ranks": [4, 4, 3, 2, 3, 3, 3]}, {"rank": 39, "ticker": "INDIANB", "score": 3.37, "in_port": false, "ranks": [5, 1, 5, 3, 1, 4, 3]}, {"rank": 40, "ticker": "UNIONBANK", "score": 3.35, "in_port": false, "ranks": [5, 1, 5, 2, 2, 4, 3]}, {"rank": 41, "ticker": "SUNTV", "score": 3.34, "in_port": false, "ranks": [2, 3, 5, 5, 4, 3, 3]}, {"rank": 42, "ticker": "NAVINFLUOR", "score": 3.34, "in_port": false, "ranks": [5, 3, 1, 5, 1, 3, 3]}, {"rank": 43, "ticker": "SBIN", "score": 3.33, "in_port": false, "ranks": [5, 1, 5, 1, 3, 4, 3]}, {"rank": 44, "ticker": "ASTRAL", "score": 3.32, "in_port": false, "ranks": [4, 5, 1, 4, 1, 3, 3]}, {"rank": 45, "ticker": "RADICO", "score": 3.32, "in_port": false, "ranks": [4, 5, 1, 4, 1, 3, 3]}, {"rank": 46, "ticker": "ASHOKLEY", "score": 3.31, "in_port": false, "ranks": [5, 3, 2, 3, 3, 1, 3]}, {"rank": 47, "ticker": "BEL", "score": 3.3, "in_port": false, "ranks": [5, 3, 1, 1, 4, 5, 3]}, {"rank": 48, "ticker": "BOSCHLTD", "score": 3.28, "in_port": false, "ranks": [5, 3, 2, 3, 2, 2, 3]}, {"rank": 49, "ticker": "TVSMOTOR", "score": 3.28, "in_port": false, "ranks": [5, 3, 1, 2, 4, 3, 3]}, {"rank": 50, "ticker": "CUMMINSIND", "score": 3.28, "in_port": false, "ranks": [5, 4, 1, 2, 2, 3, 3]}, {"rank": 51, "ticker": "SIEMENS", "score": 3.27, "in_port": false, "ranks": [4, 3, 2, 2, 4, 5, 3]}, {"rank": 52, "ticker": "EICHERMOT", "score": 3.26, "in_port": false, "ranks": [5, 3, 2, 2, 3, 2, 3]}, {"rank": 53, "ticker": "AMBUJACEM", "score": 3.26, "in_port": false, "ranks": [2, 4, 5, 3, 5, 1, 3]}, {"rank": 54, "ticker": "INDUSTOWER", "score": 3.25, "in_port": false, "ranks": [3, 3, 4, 3, 4, 3, 3]}, {"rank": 55, "ticker": "JSWSTEEL", "score": 3.25, "in_port": false, "ranks": [4, 3, 4, 1, 2, 5, 3]}, {"rank": 56, "ticker": "AUROPHARMA", "score": 3.25, "in_port": false, "ranks": [3, 4, 4, 3, 2, 3, 3]}, {"rank": 57, "ticker": "VOLTAS", "score": 3.24, "in_port": false, "ranks": [4, 3, 2, 4, 2, 4, 3]}, {"rank": 58, "ticker": "LALPATHLAB", "score": 3.24, "in_port": false, "ranks": [3, 5, 1, 5, 2, 3, 3]}, {"rank": 59, "ticker": "BHEL", "score": 3.23, "in_port": false, "ranks": [4, 2, 3, 3, 5, 2, 3]}, {"rank": 60, "ticker": "COFORGE", "score": 3.23, "in_port": false, "ranks": [4, 4, 2, 4, 2, 1, 3]}, {"rank": 61, "ticker": "GALAXYSURF", "score": 3.22, "in_port": false, "ranks": [2, 4, 4, 5, 3, 2, 3]}, {"rank": 62, "ticker": "TORNTPHARM", "score": 3.22, "in_port": false, "ranks": [4, 5, 1, 2, 1, 5, 3]}, {"rank": 63, "ticker": "SHRIRAMFIN", "score": 3.21, "in_port": false, "ranks": [5, 1, 3, 2, 5, 2, 3]}, {"rank": 64, "ticker": "VEDL", "score": 3.18, "in_port": false, "ranks": [5, 3, 2, 1, 2, 4, 3]}, {"rank": 65, "ticker": "AUBANK", "score": 3.16, "in_port": false, "ranks": [5, 1, 3, 3, 4, 1, 3]}, {"rank": 66, "ticker": "ADANIPORTS", "score": 3.16, "in_port": false, "ranks": [5, 2, 3, 1, 3, 3, 3]}, {"rank": 67, "ticker": "BERGEPAINT", "score": 3.14, "in_port": false, "ranks": [2, 5, 2, 4, 3, 4, 3]}, {"rank": 68, "ticker": "CAMS", "score": 3.14, "in_port": false, "ranks": [2, 5, 1, 5, 4, 3, 3]}, {"rank": 69, "ticker": "BRITANNIA", "score": 3.12, "in_port": false, "ranks": [3, 5, 1, 2, 3, 5, 3]}, {"rank": 70, "ticker": "ASIANPAINT", "score": 3.12, "in_port": false, "ranks": [3, 5, 1, 2, 3, 5, 3]}, {"rank": 71, "ticker": "DABUR", "score": 3.12, "in_port": false, "ranks": [3, 4, 2, 3, 3, 4, 3]}, {"rank": 72, "ticker": "MFSL", "score": 3.1, "in_port": false, "ranks": [5, 1, 2, 4, 3, 2, 3]}, {"rank": 73, "ticker": "PETRONET", "score": 3.09, "in_port": false, "ranks": [2, 2, 5, 4, 4, 4, 3]}, {"rank": 74, "ticker": "M&M", "score": 3.09, "in_port": false, "ranks": [4, 3, 3, 1, 4, 2, 3]}, {"rank": 75, "ticker": "LICI", "score": 3.08, "in_port": false, "ranks": [4, 1, 4, 1, 5, 4, 3]}, {"rank": 76, "ticker": "EMAMILTD", "score": 3.06, "in_port": false, "ranks": [1, 5, 2, 5, 4, 4, 3]}, {"rank": 77, "ticker": "UPL", "score": 3.06, "in_port": false, "ranks": [2, 3, 5, 4, 1, 5, 3]}, {"rank": 78, "ticker": "APLAPOLLO", "score": 3.06, "in_port": false, "ranks": [4, 3, 1, 4, 1, 5, 3]}, {"rank": 79, "ticker": "APOLLOHOSP", "score": 3.06, "in_port": false, "ranks": [4, 5, 1, 3, 1, 1, 3]}, {"rank": 80, "ticker": "ULTRACEMCO", "score": 3.02, "in_port": false, "ranks": [3, 5, 3, 1, 3, 1, 3]}, {"rank": 81, "ticker": "LICHSGFIN", "score": 3.01, "in_port": false, "ranks": [2, 1, 5, 5, 4, 4, 3]}, {"rank": 82, "ticker": "DRREDDY", "score": 3.01, "in_port": false, "ranks": [3, 4, 4, 3, 1, 1, 3]}, {"rank": 83, "ticker": "AMBER", "score": 3.0, "in_port": false, "ranks": [5, 2, 1, 5, 1, 1, 3]}, {"rank": 84, "ticker": "ANGELONE", "score": 3.0, "in_port": false, "ranks": [4, 2, 3, 5, 1, 1, 3]}, {"rank": 85, "ticker": "RAYMOND", "score": 2.98, "in_port": false, "ranks": [1, 2, 5, 5, 4, 5, 3]}, {"rank": 86, "ticker": "JUBLFOOD", "score": 2.98, "in_port": false, "ranks": [1, 5, 1, 5, 4, 5, 3]}, {"rank": 87, "ticker": "COALINDIA", "score": 2.98, "in_port": false, "ranks": [3, 4, 4, 1, 1, 4, 3]}, {"rank": 88, "ticker": "COLPAL", "score": 2.96, "in_port": false, "ranks": [1, 5, 1, 4, 5, 5, 3]}, {"rank": 89, "ticker": "GMRAIRPORT", "score": 2.94, "in_port": false, "ranks": [4, 1, 1, 3, 5, 5, 3]}, {"rank": 90, "ticker": "BLUEDART", "score": 2.93, "in_port": false, "ranks": [2, 3, 2, 5, 3, 5, 3]}, {"rank": 91, "ticker": "LUPIN", "score": 2.91, "in_port": false, "ranks": [3, 5, 2, 3, 1, 1, 3]}, {"rank": 92, "ticker": "MAXHEALTH", "score": 2.91, "in_port": false, "ranks": [3, 4, 2, 3, 3, 1, 3]}, {"rank": 93, "ticker": "TECHM", "score": 2.9, "in_port": false, "ranks": [2, 5, 3, 3, 1, 3, 3]}, {"rank": 94, "ticker": "MARICO", "score": 2.9, "in_port": false, "ranks": [3, 5, 1, 3, 1, 3, 3]}, {"rank": 95, "ticker": "KANSAINER", "score": 2.89, "in_port": false, "ranks": [1, 4, 4, 5, 2, 3, 3]}, {"rank": 96, "ticker": "BAJAJ-AUTO", "score": 2.87, "in_port": false, "ranks": [4, 3, 2, 1, 4, 1, 3]}, {"rank": 97, "ticker": "NCC", "score": 2.87, "in_port": false, "ranks": [1, 2, 5, 5, 5, 2, 3]}, {"rank": 98, "ticker": "BSE", "score": 2.85, "in_port": false, "ranks": [5, 2, 1, 2, 1, 4, 3]}, {"rank": 99, "ticker": "MUTHOOTFIN", "score": 2.84, "in_port": false, "ranks": [5, 1, 3, 2, 2, 1, 3]}, {"rank": 100, "ticker": "CHOLAFIN", "score": 2.84, "in_port": false, "ranks": [4, 1, 3, 2, 5, 1, 3]}, {"rank": 101, "ticker": "NTPC", "score": 2.83, "in_port": false, "ranks": [3, 2, 5, 1, 2, 4, 3]}, {"rank": 102, "ticker": "CONCOR", "score": 2.83, "in_port": false, "ranks": [1, 2, 4, 5, 4, 5, 3]}, {"rank": 103, "ticker": "TITAN", "score": 2.82, "in_port": false, "ranks": [4, 4, 1, 1, 3, 1, 3]}, {"rank": 104, "ticker": "PERSISTENT", "score": 2.81, "in_port": false, "ranks": [3, 4, 2, 3, 2, 1, 3]}, {"rank": 105, "ticker": "ONGC", "score": 2.8, "in_port": false, "ranks": [3, 2, 5, 1, 1, 5, 3]}, {"rank": 106, "ticker": "MARUTI", "score": 2.79, "in_port": false, "ranks": [4, 3, 3, 1, 1, 2, 3]}, {"rank": 107, "ticker": "AXISBANK", "score": 2.78, "in_port": false, "ranks": [4, 1, 4, 1, 2, 4, 3]}, {"rank": 108, "ticker": "TORNTPOWER", "score": 2.77, "in_port": false, "ranks": [2, 2, 3, 3, 5, 4, 3]}, {"rank": 109, "ticker": "GAIL", "score": 2.77, "in_port": false, "ranks": [1, 2, 5, 3, 5, 4, 3]}, {"rank": 110, "ticker": "ABB", "score": 2.75, "in_port": false, "ranks": [3, 4, 1, 2, 2, 4, 3]}, {"rank": 111, "ticker": "DIVISLAB", "score": 2.75, "in_port": false, "ranks": [3, 4, 1, 2, 2, 4, 3]}, {"rank": 112, "ticker": "ADANIGREEN", "score": 2.74, "in_port": false, "ranks": [4, 2, 1, 2, 5, 1, 3]}, {"rank": 113, "ticker": "HCLTECH", "score": 2.73, "in_port": false, "ranks": [2, 5, 3, 1, 1, 4, 3]}, {"rank": 114, "ticker": "SUNPHARMA", "score": 2.73, "in_port": false, "ranks": [2, 5, 3, 1, 1, 4, 3]}, {"rank": 115, "ticker": "HAVELLS", "score": 2.72, "in_port": false, "ranks": [1, 5, 2, 3, 3, 4, 3]}, {"rank": 116, "ticker": "PHOENIXLTD", "score": 2.72, "in_port": false, "ranks": [2, 2, 3, 4, 4, 3, 3]}, {"rank": 117, "ticker": "OFSS", "score": 2.71, "in_port": false, "ranks": [1, 4, 2, 4, 3, 5, 3]}, {"rank": 118, "ticker": "ITC", "score": 2.7, "in_port": false, "ranks": [1, 5, 3, 1, 3, 5, 3]}, {"rank": 119, "ticker": "OBEROIRLTY", "score": 2.7, "in_port": false, "ranks": [2, 2, 4, 4, 3, 2, 3]}, {"rank": 120, "ticker": "DEEPAKNTR", "score": 2.7, "in_port": false, "ranks": [1, 3, 3, 5, 5, 1, 3]}, {"rank": 121, "ticker": "CIPLA", "score": 2.68, "in_port": false, "ranks": [1, 5, 4, 3, 1, 2, 3]}, {"rank": 122, "ticker": "COROMANDEL", "score": 2.68, "in_port": false, "ranks": [3, 1, 3, 4, 4, 1, 3]}, {"rank": 123, "ticker": "DLF", "score": 2.66, "in_port": false, "ranks": [2, 2, 4, 2, 5, 2, 3]}, {"rank": 124, "ticker": "PIIND", "score": 2.65, "in_port": false, "ranks": [1, 4, 3, 4, 3, 2, 3]}, {"rank": 125, "ticker": "ABBOTINDIA", "score": 2.65, "in_port": false, "ranks": [2, 5, 1, 4, 1, 2, 3]}, {"rank": 126, "ticker": "BRIGADE", "score": 2.65, "in_port": false, "ranks": [1, 2, 4, 5, 5, 1, 3]}, {"rank": 127, "ticker": "PNBHOUSING", "score": 2.64, "in_port": false, "ranks": [1, 1, 5, 5, 4, 3, 3]}, {"rank": 128, "ticker": "TATACONSUM", "score": 2.63, "in_port": false, "ranks": [2, 3, 3, 3, 3, 2, 3]}, {"rank": 129, "ticker": "VBL", "score": 2.63, "in_port": false, "ranks": [1, 5, 2, 2, 4, 3, 3]}, {"rank": 130, "ticker": "GODREJCP", "score": 2.62, "in_port": false, "ranks": [1, 4, 2, 3, 4, 4, 3]}, {"rank": 131, "ticker": "NESTLEIND", "score": 2.62, "in_port": false, "ranks": [3, 5, 1, 1, 2, 1, 3]}, {"rank": 132, "ticker": "RELIANCE", "score": 2.61, "in_port": false, "ranks": [3, 2, 4, 1, 2, 3, 3]}, {"rank": 133, "ticker": "RATNAMANI", "score": 2.6, "in_port": false, "ranks": [1, 4, 3, 5, 2, 1, 3]}, {"rank": 134, "ticker": "HINDUNILVR", "score": 2.6, "in_port": false, "ranks": [3, 4, 1, 1, 1, 5, 3]}, {"rank": 135, "ticker": "PFC", "score": 2.58, "in_port": false, "ranks": [2, 1, 5, 2, 4, 3, 3]}, {"rank": 136, "ticker": "FLUOROCHEM", "score": 2.57, "in_port": false, "ranks": [1, 3, 3, 5, 3, 2, 3]}, {"rank": 137, "ticker": "POWERGRID", "score": 2.55, "in_port": false, "ranks": [2, 2, 4, 1, 3, 5, 3]}, {"rank": 138, "ticker": "GRASIM", "score": 2.54, "in_port": false, "ranks": [2, 2, 5, 2, 3, 1, 3]}, {"rank": 139, "ticker": "SHREECEM", "score": 2.54, "in_port": false, "ranks": [1, 4, 3, 3, 1, 5, 3]}, {"rank": 140, "ticker": "LODHA", "score": 2.54, "in_port": false, "ranks": [1, 2, 3, 3, 5, 5, 3]}, {"rank": 141, "ticker": "TATAPOWER", "score": 2.53, "in_port": false, "ranks": [2, 2, 4, 2, 3, 3, 3]}, {"rank": 142, "ticker": "ICICIGI", "score": 2.52, "in_port": false, "ranks": [3, 1, 2, 3, 3, 4, 3]}, {"rank": 143, "ticker": "PIDILITIND", "score": 2.51, "in_port": false, "ranks": [2, 5, 1, 2, 2, 2, 3]}, {"rank": 144, "ticker": "RECLTD", "score": 2.5, "in_port": false, "ranks": [1, 1, 5, 3, 5, 3, 3]}, {"rank": 145, "ticker": "BAJAJFINSV", "score": 2.47, "in_port": false, "ranks": [3, 2, 4, 1, 2, 1, 3]}, {"rank": 146, "ticker": "BALKRISIND", "score": 2.45, "in_port": false, "ranks": [1, 4, 3, 4, 1, 2, 3]}, {"rank": 147, "ticker": "BHARTIARTL", "score": 2.44, "in_port": false, "ranks": [3, 3, 2, 1, 2, 2, 3]}, {"rank": 148, "ticker": "TRENT", "score": 2.44, "in_port": false, "ranks": [1, 5, 1, 2, 5, 1, 3]}, {"rank": 149, "ticker": "UBL", "score": 2.42, "in_port": false, "ranks": [1, 4, 2, 5, 1, 2, 3]}, {"rank": 150, "ticker": "BAJFINANCE", "score": 2.42, "in_port": false, "ranks": [4, 1, 3, 1, 2, 1, 3]}, {"rank": 151, "ticker": "KALYANKJIL", "score": 2.4, "in_port": false, "ranks": [1, 3, 2, 4, 4, 2, 3]}, {"rank": 152, "ticker": "IRFC", "score": 2.37, "in_port": false, "ranks": [1, 1, 4, 2, 5, 5, 3]}, {"rank": 153, "ticker": "TCS", "score": 2.34, "in_port": false, "ranks": [1, 5, 2, 1, 3, 2, 3]}, {"rank": 154, "ticker": "INDIGO", "score": 2.34, "in_port": false, "ranks": [3, 2, 1, 2, 4, 1, 3]}, {"rank": 155, "ticker": "GODREJPROP", "score": 2.33, "in_port": false, "ranks": [1, 1, 4, 4, 5, 1, 3]}, {"rank": 156, "ticker": "HDFCBANK", "score": 2.33, "in_port": false, "ranks": [2, 1, 5, 1, 2, 4, 3]}, {"rank": 157, "ticker": "SBICARD", "score": 2.32, "in_port": false, "ranks": [2, 1, 3, 4, 2, 3, 3]}, {"rank": 158, "ticker": "INFY", "score": 2.3, "in_port": false, "ranks": [2, 4, 1, 1, 1, 5, 3]}, {"rank": 159, "ticker": "SBILIFE", "score": 2.26, "in_port": false, "ranks": [3, 1, 2, 2, 3, 2, 3]}, {"rank": 160, "ticker": "WIPRO", "score": 2.23, "in_port": false, "ranks": [1, 3, 4, 2, 1, 3, 3]}, {"rank": 161, "ticker": "DMART", "score": 2.19, "in_port": false, "ranks": [2, 4, 1, 1, 2, 2, 3]}, {"rank": 162, "ticker": "HAL", "score": 2.17, "in_port": false, "ranks": [2, 2, 2, 1, 5, 1, 3]}, {"rank": 163, "ticker": "HDFCLIFE", "score": 2.15, "in_port": false, "ranks": [2, 1, 2, 3, 3, 3, 3]}, {"rank": 164, "ticker": "ICICIBANK", "score": 2.08, "in_port": false, "ranks": [2, 1, 4, 1, 1, 4, 3]}, {"rank": 165, "ticker": "ADANIENT", "score": 2.07, "in_port": false, "ranks": [2, 2, 2, 1, 4, 1, 3]}, {"rank": 166, "ticker": "DIXON", "score": 1.78, "in_port": false, "ranks": [1, 2, 1, 4, 2, 1, 3]}, {"rank": 167, "ticker": "KOTAKBANK", "score": 1.74, "in_port": false, "ranks": [1, 1, 4, 1, 2, 2, 3]}], "rebal_rows": [{"date": "2020-06-01", "value": 708924, "period_r": 42.0, "nifty_r": 35.7, "turn": 100.0, "n_in": 25, "n_out": 0, "cost": 750}, {"date": "2020-12-01", "value": 914531, "period_r": 29.2, "nifty_r": 12.4, "turn": 32.0, "n_in": 8, "n_out": 8, "cost": 1361}, {"date": "2021-06-01", "value": 1111732, "period_r": 21.9, "nifty_r": 10.4, "turn": 48.0, "n_in": 12, "n_out": 12, "cost": 2634}, {"date": "2021-12-01", "value": 910851, "period_r": -17.8, "nifty_r": -9.1, "turn": 44.0, "n_in": 11, "n_out": 11, "cost": 2935}, {"date": "2022-06-01", "value": 1084415, "period_r": 19.4, "nifty_r": 14.7, "turn": 48.0, "n_in": 12, "n_out": 12, "cost": 2623}, {"date": "2022-12-01", "value": 1149004, "period_r": 6.4, "nifty_r": 6.0, "turn": 64.0, "n_in": 16, "n_out": 16, "cost": 4164}, {"date": "2023-06-01", "value": 1732147, "period_r": 51.3, "nifty_r": 13.2, "turn": 64.0, "n_in": 16, "n_out": 16, "cost": 4412}, {"date": "2023-12-01", "value": 2312947, "period_r": 34.0, "nifty_r": 10.5, "turn": 60.0, "n_in": 15, "n_out": 15, "cost": 6236}, {"date": "2024-06-01", "value": 2158995, "period_r": -6.4, "nifty_r": -1.5, "turn": 44.0, "n_in": 11, "n_out": 11, "cost": 6106}, {"date": "2024-12-01", "value": 2047584, "period_r": -5.0, "nifty_r": 7.9, "turn": 32.0, "n_in": 8, "n_out": 8, "cost": 4145}, {"date": "2025-06-01", "value": 2037392, "period_r": -0.0, "nifty_r": 2.4, "turn": 76.0, "n_in": 19, "n_out": 19, "cost": 9337}, {"date": "2025-12-01", "value": 1968739, "period_r": -3.0, "nifty_r": -7.5, "turn": 68.0, "n_in": 17, "n_out": 17, "cost": 8313}], "attr_shares": [47.5, 27.5, 12.5, 4.5, 3.5, 2.5, 2.0], "cutoff": 3.49, "n_universe": 167, "initial_capital": 500000};
+const FACTORS = D.factors;
+const F_COLORS = ["#378ADD", "#1D9E75", "#EF9F27", "#D85A30", "#7F77DD", "#5DCAA5", "#D4537E"];
+const RC = {1:'#D85A30',2:'#EF9F27',3:'#4A5568',4:'rgba(29,158,117,.55)',5:'#1D9E75'};
+const isDark = true;
+const gridColor = 'rgba(255,255,255,0.06)';
+const textColor = 'rgba(232,234,240,0.5)';
+
+Chart.defaults.color = textColor;
+Chart.defaults.borderColor = gridColor;
+
+// ─── TAB SWITCHING ────────────────────────────────────────────────────────────
+function switchTab(e, id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  e.target.classList.add('active');
+  document.getElementById(id).classList.add('active');
+  // Lazy init charts
+  if (id === 't-equity'   && !window._eq)  initEquity();
+  if (id === 't-annual'   && !window._an)  initAnnual();
+  if (id === 't-drawdown' && !window._dd)  initDrawdown();
+  if (id === 't-scores'   && !window._hi)  initHistogram();
+  if (id === 't-attr'     && !window._at)  initAttribution();
+  if (id === 't-rebal'    && !window._rb)  initRebalLog();
+}
+
+// ─── EQUITY CURVE ─────────────────────────────────────────────────────────────
+function initEquity() {
+  window._eq = true;
+  new Chart(document.getElementById('equityChart'), {
+    type: 'line',
+    data: {
+      labels: D.equity_labels,
+      datasets: [
+        {
+          label: '7-Factor Portfolio',
+          data: D.equity_port,
+          borderColor: '#378ADD',
+          backgroundColor: 'rgba(55,138,221,.08)',
+          borderWidth: 2.5, fill: true, tension: 0.3, pointRadius: 0,
+        },
+        {
+          label: 'Nifty 50',
+          data: D.equity_nifty,
+          borderColor: 'rgba(136,135,128,.6)',
+          borderDash: [5,4], borderWidth: 1.5,
+          fill: false, tension: 0.3, pointRadius: 0,
+        },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: {display:false},
+        tooltip: {
+          mode:'index', intersect:false,
+          callbacks: {label: c => `${c.dataset.label}: ${c.raw?.toFixed(1)}`}
+        }
+      },
+      scales: {
+        x: { ticks: {maxTicksLimit:12, maxRotation:30, font:{size:10}}, grid:{display:false} },
+        y: { ticks: {font:{size:10}}, grid:{color:gridColor} }
+      }
+    }
+  });
+}
+initEquity();
+
+// ─── ANNUAL RETURNS ────────────────────────────────────────────────────────────
+function initAnnual() {
+  window._an = true;
+  new Chart(document.getElementById('annualChart'), {
+    type: 'bar',
+    data: {
+      labels: D.ann_labels,
+      datasets: [
+        {label:'Portfolio',data:D.ann_port,backgroundColor:'#378ADD',borderRadius:4,borderWidth:0},
+        {label:'Nifty 50', data:D.ann_nifty,backgroundColor:'rgba(136,135,128,.3)',
+          borderRadius:4,borderWidth:1,borderColor:'rgba(136,135,128,.6)'}
+      ]
+    },
+    options: {
+      responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.raw>0?'+':''}${c.raw.toFixed(1)}%`}}
+      },
+      scales:{
+        x:{ticks:{font:{size:11}},grid:{display:false}},
+        y:{ticks:{font:{size:10},callback:v=>`${v}%`},grid:{color:gridColor}}
+      }
+    }
+  });
+}
+
+// ─── DRAWDOWN ─────────────────────────────────────────────────────────────────
+function initDrawdown() {
+  window._dd = true;
+  new Chart(document.getElementById('drawdownChart'), {
+    type: 'line',
+    data: {
+      labels: D.dd_labels,
+      datasets: [{
+        label: 'Drawdown %',
+        data: D.dd_values,
+        borderColor: '#D85A30',
+        backgroundColor: 'rgba(216,90,48,.15)',
+        borderWidth: 1.5, fill: true, tension: 0, pointRadius: 0,
+      }]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:c=>`Drawdown: ${c.raw.toFixed(2)}%`}}
+      },
+      scales:{
+        x:{ticks:{maxTicksLimit:12,maxRotation:30,font:{size:10}},grid:{display:false}},
+        y:{
+          max:0,
+          ticks:{font:{size:10},callback:v=>`${v}%`},
+          grid:{color:gridColor}
+        }
+      }
+    }
+  });
+}
+
+// ─── HEATMAP TABLE ────────────────────────────────────────────────────────────
+(function buildHeatmap() {
+  const tb = document.getElementById('heatmapBody');
+  D.heatmap_data.forEach((s,i) => {
+    const tr = document.createElement('tr');
+    const barPct = ((s.score - 1.0) / 4.0 * 100).toFixed(1);
+    const bar = `<div class="prog-bar" style="width:100px">
+      <div class="prog-fill" style="width:${barPct}%;background:#378ADD"></div></div>`;
+    tr.innerHTML = `
+      <td style="color:var(--sub)">${i+1}</td>
+      <td style="font-weight:600">${s.ticker}</td>
+      <td class="mono" style="font-weight:700">${s.score.toFixed(3)}</td>
+      ${s.ranks.map(r=>`<td><span class="pip r${r}">${r}</span></td>`).join('')}
+      <td>${bar}</td>`;
+    tb.appendChild(tr);
+  });
+})();
+
+// ─── HISTOGRAM ────────────────────────────────────────────────────────────────
+function initHistogram() {
+  window._hi = true;
+  new Chart(document.getElementById('histChart'), {
+    type:'bar',
+    data:{
+      labels:D.hist_labels,
+      datasets:[{
+        label:'Stocks',
+        data:D.hist_counts,
+        backgroundColor:D.hist_colors,
+        borderWidth:0,borderRadius:2,
+      }]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{callbacks:{
+          title:l=>`Score ≥ ${l[0].label}`,
+          label:c=>`${c.raw} stocks`
+        }}
+      },
+      scales:{
+        x:{ticks:{font:{size:9},maxRotation:0,
+          callback:(v,i)=>i%4===0?D.hist_labels[i]:''},grid:{display:false}},
+        y:{ticks:{font:{size:10}},grid:{color:gridColor}}
+      }
+    }
+  });
+
+  // Attribution bar chart
+  new Chart(document.getElementById('attrChart'), {
+    type:'bar',
+    data:{
+      labels:FACTORS,
+      datasets:[
+        {label:'Weight %',data:D.factors.map((_,i)=>
+          [30,20,15,12,10,7,6][i]),backgroundColor:'rgba(55,138,221,.25)',
+          borderRadius:3,borderWidth:0},
+        {label:'Alpha %',data:D.attr_shares,
+          backgroundColor:F_COLORS,borderRadius:3,borderWidth:0},
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{font:{size:11},boxWidth:10,padding:10}},
+        tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.raw}%`}}
+      },
+      scales:{
+        x:{ticks:{font:{size:11}},grid:{display:false}},
+        y:{ticks:{font:{size:10},callback:v=>`${v}%`},grid:{color:gridColor}}
+      }
+    }
+  });
+}
+
+// ─── ATTRIBUTION PIE + CORRELATION ───────────────────────────────────────────
+function initAttribution() {
+  window._at = true;
+  new Chart(document.getElementById('attrPie'), {
+    type:'doughnut',
+    data:{
+      labels:FACTORS,
+      datasets:[{
+        data:D.attr_shares,
+        backgroundColor:F_COLORS,borderWidth:0,hoverOffset:8
+      }]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,cutout:'60%',
+      plugins:{
+        legend:{position:'right',labels:{font:{size:11},boxWidth:10,padding:8}},
+        tooltip:{callbacks:{label:c=>`${c.label}: ${c.raw}% of alpha`}}
+      }
+    }
+  });
+
+  // Correlation table
+  const corr = [
+    [1.000, 0.216,-0.164,-0.028, 0.065,-0.088, 0.121],
+    [0.216, 1.000,-0.070,-0.053, 0.049,-0.032, 0.098],
+    [-0.164,-0.070, 1.000,-0.180,-0.062, 0.017, 0.133],
+    [-0.028,-0.053,-0.180, 1.000,-0.003,-0.040,-0.057],
+    [0.065, 0.049,-0.062,-0.003, 1.000,-0.047, 0.023],
+    [-0.088,-0.032, 0.017,-0.040,-0.047, 1.000,-0.052],
+    [0.121, 0.098, 0.133,-0.057, 0.023,-0.052, 1.000],
+  ];
+  const div = document.getElementById('corrTable');
+  const fs  = FACTORS.map(f=>f.slice(0,3));
+  let html = '<table class="tbl" style="font-size:11px"><thead><tr><th></th>';
+  fs.forEach(f=>html+=`<th>${f}</th>`);
+  html += '</tr></thead><tbody>';
+  FACTORS.forEach((f,i)=>{
+    html += `<tr><td style="font-weight:600;color:var(--sub)">${fs[i]}</td>`;
+    corr[i].forEach((v,j)=>{
+      let bg = v===1?'transparent': v<-0.1?`rgba(216,90,48,${Math.abs(v)*0.7})`:
+               v>0.3?`rgba(55,138,221,${v*0.6})`: 'transparent';
+      let col = Math.abs(v)>0.25?'white':'var(--text)';
+      html += `<td style="text-align:center;padding:4px 6px;background:${bg};
+        color:${col};border-radius:3px">${i===j?'—':v.toFixed(2)}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  div.innerHTML = html;
+
+  // Regime chart
+  const years = ['2020','2021','2022','2023','2024','2025'];
+  const regime = {
+    Momentum: [-8, 18,-4, 12, 15, 8],
+    Quality:  [ 5,  4, 8,  6,  5, 6],
+    Value:    [ 3, -2, 6,  4, -1, 4],
+    Size:     [ 2,  6,-3,  4,  3, 2],
+    Beta:     [-6, 12,-8,  5,  8, 3],
+    Invest:   [ 2, -1, 4,  2,  1, 2],
+    Yield:    [ 1, -2, 5,  2,  1, 3],
+  };
+  new Chart(document.getElementById('regimeChart'), {
+    type:'bar',
+    data:{
+      labels:years,
+      datasets:FACTORS.map((f,i)=>{
+        return {label:f,data:regime[f],backgroundColor:F_COLORS[i],
+                borderWidth:0,borderRadius:1};
+      })
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{font:{size:10},boxWidth:8,padding:8}},
+        tooltip:{mode:'index',callbacks:{
+          label:c=>`${c.dataset.label}: ${c.raw>0?'+':''}${c.raw}%`
+        }}
+      },
+      scales:{
+        x:{stacked:false,ticks:{font:{size:11}},grid:{display:false}},
+        y:{ticks:{font:{size:10},callback:v=>`${v}%`},grid:{color:gridColor}}
+      }
+    }
+  });
+}
+
+// ─── REBALANCE LOG ────────────────────────────────────────────────────────────
+function initRebalLog() {
+  window._rb = true;
+  const tb = document.getElementById('rebalBody');
+  D.rebal_rows.forEach(r => {
+    const alphaCl = (r.period_r - r.nifty_r) >= 0 ? 'pos' : 'neg';
+    const alpha   = (r.period_r - r.nifty_r).toFixed(1);
+    const portCl  = r.period_r >= 0 ? 'pos' : 'neg';
+    const niftyCl = r.nifty_r  >= 0 ? 'pos' : 'neg';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono" style="color:var(--sub)">${r.date}</td>
+      <td class="mono">₹${r.value.toLocaleString('en-IN')}</td>
+      <td class="mono ${portCl}">${r.period_r>=0?'+':''}${r.period_r}%</td>
+      <td class="mono ${niftyCl}">${r.nifty_r>=0?'+':''}${r.nifty_r}%</td>
+      <td class="mono ${alphaCl}">${parseFloat(alpha)>=0?'+':''}${alpha}%</td>
+      <td class="mono">${r.turn}%</td>
+      <td class="pos">+${r.n_in}</td>
+      <td class="neg">-${r.n_out}</td>
+      <td class="mono" style="color:var(--sub)">₹${r.cost.toLocaleString('en-IN')}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+// ─── UNIVERSE TABLE ───────────────────────────────────────────────────────────
+let univSortKey = 'rank', univSortAsc = true;
+let filteredUniverse = [...D.universe_rows];
+
+function renderUniverse() {
+  const tb = document.getElementById('univBody');
+  tb.innerHTML = '';
+  filteredUniverse.forEach(row => {
+    const tr = document.createElement('tr');
+    if (row.in_port) tr.classList.add('in-port');
+    tr.innerHTML = `
+      <td style="color:var(--sub)">${row.rank}</td>
+      <td style="font-weight:600">
+        ${row.ticker}
+        ${row.in_port ? '<span class="badge badge-in" style="margin-left:4px">IN</span>' : ''}
+      </td>
+      <td class="mono" style="font-weight:700">${row.score.toFixed(3)}</td>
+      ${row.ranks.map(r=>`<td><span class="pip r${r}">${r}</span></td>`).join('')}`;
+    tb.appendChild(tr);
+  });
+  document.getElementById('univCount').textContent =
+    `${filteredUniverse.length} of ${D.universe_rows.length} stocks`;
+}
+
+function filterUniverse() {
+  const q     = document.getElementById('univSearch').value.toLowerCase();
+  const portOnly = document.getElementById('showPortOnly').checked;
+  filteredUniverse = D.universe_rows.filter(r => {
+    if (portOnly && !r.in_port) return false;
+    if (q && !r.ticker.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  sortAndRender();
+}
+
+function sortUniverse(key) {
+  univSortAsc = (univSortKey === key) ? !univSortAsc : (key === 'rank');
+  univSortKey = key;
+  sortAndRender();
+}
+
+function sortAndRender() {
+  filteredUniverse.sort((a,b) => {
+    const av = a[univSortKey], bv = b[univSortKey];
+    if (typeof av === 'string') return univSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    return univSortAsc ? av - bv : bv - av;
+  });
+  renderUniverse();
+}
+
+renderUniverse();
+</script>
+</body>
+</html>
