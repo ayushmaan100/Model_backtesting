@@ -104,6 +104,36 @@ def compute_momentum_scores(
     mom_score.name = "raw_Momentum"
     return mom_score
 
+def compute_rolling_betas(prices_to_date: pd.DataFrame, window: int = 36) -> pd.Series:
+    """
+    Compute OLS Beta dynamically using only the trailing price data available at the rebalance date.
+    """
+    from scipy import stats
+    
+    if NIFTY_TICKER not in prices_to_date.columns:
+        return pd.Series(1.0, index=[c for c in prices_to_date.columns if c != NIFTY_TICKER])
+
+    # Extract the trailing window of logarithmic returns
+    rets = np.log(prices_to_date / prices_to_date.shift(1)).dropna().tail(window)
+    nifty = rets[NIFTY_TICKER].values
+    
+    betas = {}
+    for t in [c for c in rets.columns if c != NIFTY_TICKER]:
+        sr = rets[t].values
+        mask = ~(np.isnan(sr) | np.isnan(nifty))
+        
+        # Require at least 12 months of data to calculate a valid Beta
+        if mask.sum() < 12:
+            betas[t] = 1.0
+            continue
+            
+        slope, *_ = stats.linregress(nifty[mask], sr[mask])
+        betas[t] = np.clip(slope, 0.1, 4.0)
+        
+    beta_series = pd.Series(betas)
+    beta_series.name = "raw_Beta"
+    return beta_series
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 2: COMBINE ALL RAW FACTOR METRICS
@@ -112,10 +142,15 @@ def compute_momentum_scores(
 def compute_raw_metrics(
     prices_df: pd.DataFrame,
     fund_df:   pd.DataFrame,
-    as_of_date=None
+    as_of_date=None,
+    active_universe=None
 ) -> pd.DataFrame:
     """
     Combine momentum (from prices) with 6 fundamental metrics.
+
+    Handles two fund_df formats:
+      1. PiT tall DataFrame (has 'Date' column) → uses get_pit_snapshot()
+      2. Flat DataFrame (indexed by ticker)      → uses directly (mock data)
 
     Returns one DataFrame with columns:
         raw_Momentum, raw_Quality, raw_Value, raw_Size,
@@ -123,26 +158,48 @@ def compute_raw_metrics(
 
     One row per stock. Stocks missing momentum data are excluded.
     """
-    # Momentum from prices
+    # 0. Apply universe mask right away to prices if given
+    if active_universe is not None:
+        prices_df = prices_df[[c for c in prices_df.columns if c in active_universe or c == 'Nifty50']]
+
+    # 1. Momentum & Beta from Point-in-Time Prices
     mom = compute_momentum_scores(prices_df, as_of_date)
 
-    # Fundamentals (all stocks in fund_df)
+    prices_to_date = prices_df if as_of_date is None else prices_df[prices_df.index <= pd.Timestamp(as_of_date)]
+    beta = compute_rolling_betas(prices_to_date)
+
+    # 2. Build fundamentals snapshot
+    # Detect if fund_df is a PiT tall DataFrame or a flat snapshot
+    if 'Date' in fund_df.columns and 'Ticker' in fund_df.columns:
+        # PiT format → build a point-in-time snapshot with dynamic universe filtering
+        from data_layer import get_pit_snapshot
+        effective_date = pd.Timestamp(as_of_date) if as_of_date else prices_df.index[-1]
+        fund_snapshot = get_pit_snapshot(fund_df, prices_df, effective_date)
+    else:
+        # Already flat (mock data or pre-sliced by backtester)
+        fund_snapshot = fund_df
+
+    # 3. Map fundamental columns
     fund_map = {
         "raw_Quality": "gross_profit_assets",
         "raw_Value"  : "book_to_market",
         "raw_Size"   : "market_cap_cr",
-        "raw_Beta"   : "beta_nifty50",
         "raw_Invest" : "asset_growth_yoy",
         "raw_Yield"  : "dividend_yield_pct",
     }
 
-    raw = pd.DataFrame({"raw_Momentum": mom})
+    # Construct the raw metrics DataFrame
+    raw = pd.DataFrame({"raw_Momentum": mom, "raw_Beta": beta})
     for col_name, src_col in fund_map.items():
-        if src_col in fund_df.columns:
-            raw[col_name] = fund_df[src_col]
+        if src_col in fund_snapshot.columns:
+            raw[col_name] = fund_snapshot[src_col]
 
-    # Drop stocks with no data at all
     raw = raw.dropna(how="all")
+
+    # Pass through filter stats for logging
+    if hasattr(fund_snapshot, 'attrs') and '_filter_stats' in fund_snapshot.attrs:
+        raw.attrs['_filter_stats'] = fund_snapshot.attrs['_filter_stats']
+
     return raw
 
 
@@ -260,12 +317,28 @@ def composite_score(ranked_df: pd.DataFrame) -> pd.DataFrame:
         DataFrame sorted descending by Final_Score.
     """
     df = ranked_df.copy()
-    df["Final_Score"] = 0.0
 
-    for factor, weight in WEIGHTS.items():
-        rank_col = f"Rank_{factor}"
-        if rank_col in df.columns:
-            df["Final_Score"] += df[rank_col] * weight
+    # Identify which factors are actually present in the rank table.
+    # If any factor is missing we MUST renormalise — otherwise the score range
+    # collapses below [1, 5] and the mean drifts away from the 3.0 invariant.
+    present  = {f: w for f, w in WEIGHTS.items() if f"Rank_{f}" in df.columns}
+    missing  = [f for f in WEIGHTS if f not in present]
+    total_w  = sum(present.values())
+
+    if not present:
+        raise ValueError("composite_score: no Rank_* columns found in input.")
+
+    if missing:
+        import warnings
+        warnings.warn(
+            f"composite_score: factor(s) {missing} missing from rank table; "
+            f"renormalising remaining weights (sum={total_w:.3f}) to 1.0.",
+            RuntimeWarning,
+        )
+
+    df["Final_Score"] = 0.0
+    for factor, weight in present.items():
+        df["Final_Score"] += df[f"Rank_{factor}"] * (weight / total_w)
 
     df["Final_Score"] = df["Final_Score"].round(4)
     df = df.sort_values("Final_Score", ascending=False)
@@ -299,7 +372,8 @@ def run_factor_engine(
     prices_df: pd.DataFrame,
     fund_df:   pd.DataFrame,
     as_of_date=None,
-    verbose:   bool = True
+    verbose:   bool = True,
+    active_universe=None
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Run all 5 steps. Returns (all_stocks_scored, portfolio_top_n).
@@ -314,7 +388,7 @@ def run_factor_engine(
         scored_df  : all stocks with raw values, ranks, and Final_Score
         portfolio  : top PORTFOLIO_SIZE stocks with equal weights
     """
-    raw_df    = compute_raw_metrics(prices_df, fund_df, as_of_date)
+    raw_df    = compute_raw_metrics(prices_df, fund_df, as_of_date, active_universe)
     ranked_df = rank_quintiles(raw_df)
     scored_df = composite_score(ranked_df)
     portfolio = select_portfolio(scored_df)
