@@ -4,12 +4,20 @@ universe_builder.py — Build historical Nifty 200 constituent universe
 STRATEGY (hybrid):
   1. Mar 2020 – Mar 2022:  Parse NIFTY_200_*.pdf from monthly ZIPs (full 200-stock list)
   2. Sep 2022 – Mar 2026:  Parse NIFTY_50 + NIFTY_Next_50 PDFs → get Nifty 100 (~50% of universe)
-                           then combine with current CSV list to fill in the Midcap 100 portion
+                           then carry-forward the previous full Nifty-200 universe (C4 fix)
   3. Current (latest):     Download live CSV from niftyindices.com (full 200-stock list)
 
+CLEANING (C2 + C3):
+  - Strict symbol validator: rejects pure-numeric tokens, ≤1-char symbols, and
+    anything not matching ^[A-Z][A-Z0-9&\\-]{1,15}$
+  - Rename / merger map normalises old tickers to their post-rename successors
+    (HDFC→HDFCBANK, MOTHERSUMI→MOTHERSON, CADILAHC→ZYDUSLIFE, etc.)
+
 OUTPUT:
-  data/universe/universe_history.csv — all constituent snapshots
-  data/universe/superset_tickers.txt — union of all stocks ever in Nifty 200
+  data/universe/universe_history.csv              — raw per-period snapshots
+  data/universe/universe_history_interpolated.csv — fwd-filled per-rebal table
+                                                    (this is what backtester reads)
+  data/universe/superset_tickers.txt              — union of all stocks ever held
 
 USAGE:
   python3 universe_builder.py              ← download + parse + build
@@ -75,6 +83,59 @@ NOISE_WORDS = {
     "DAMAGE", "LOSS", "NATURE", "ARISING", "USE", "SUCH", "DATA",
     "CAPITAL", "TOTAL", "CAPITAL",
 }
+
+
+# ── C2: Strict symbol validator ───────────────────────────────────────────
+# A valid NSE symbol is uppercase, starts with a letter, 2–16 chars total,
+# may contain digits / & / - but no other punctuation.
+_VALID_SYMBOL = re.compile(r"^[A-Z][A-Z0-9&\-]{1,15}$")
+
+def _is_valid_symbol(sym: str) -> bool:
+    """Reject PDF page numbers, single chars, all-noise tokens, etc."""
+    if not sym:
+        return False
+    if sym in NOISE_WORDS:
+        return False
+    if sym.isdigit():
+        return False                      # "1", "2", … (page numbers)
+    if len(sym) < 2:
+        return False                      # "M", "S" (single-char artefacts)
+    if not _VALID_SYMBOL.match(sym):
+        return False
+    return True
+
+
+# ── C3: Rename / merger map ───────────────────────────────────────────────
+# Maps old NSE symbols to their post-rename / post-merger successors.
+# Applied AFTER PDF parsing so old constituents get the modern ticker that
+# yfinance + screener.in actually recognise. Update this when NSE renames a
+# company or two listed entities merge.
+RENAME_MAP: dict[str, str] = {
+    # Mergers — old delisted, replaced by surviving entity
+    "HDFC":         "HDFCBANK",     # HDFC Ltd merged with HDFCBANK (Jul 2023)
+    "INFRATEL":     "INDUSTOWER",   # Bharti Infratel merged with Indus Towers
+    "MINDTREE":     "LTIM",         # Mindtree + LTI → LTIMindtree (Nov 2022)
+    "LTI":          "LTIM",         # LTI side of the same merger
+    # Renames — same listed entity, new ticker
+    "MOTHERSUMI":   "MOTHERSON",
+    "CADILAHC":     "ZYDUSLIFE",
+    "SRTRANSFIN":   "SHRIRAMFIN",
+    "AMARAJABAT":   "ARE&M",
+    "GMRINFRA":     "GMRAIRPORT",
+    "ZOMATO":       "ETERNAL",      # Renamed Apr 2025
+    "ATGL":         "ADANIGAS",     # Adani Total Gas listed under both names
+    "ADANITRANS":   "ADANIENSOL",
+    "L&TFH":        "LTF",
+    "LTM":          "LTIM",         # parsing artefact for LTIMindtree
+    # Concatenation artefacts from PDF parser (defensive)
+    "SBICARDSBI":   "SBICARD",
+    "NYKAAFSN":     "NYKAA",
+    "CGPOWERCG":    "CGPOWER",
+}
+
+def _normalise_symbol(sym: str) -> str:
+    """Apply rename/merger map. Returns the modern symbol."""
+    return RENAME_MAP.get(sym, sym)
 
 
 # ── Download ──────────────────────────────────────────────────────────────
@@ -145,22 +206,21 @@ def _parse_nifty_pdf(pdf_path: str) -> list[str]:
         line = re.sub(r'^(ICICIPRULI)ICICI', r'\1 ICICI', line)
         line = re.sub(r'^(SBILIFE)SBI', r'\1 SBI', line)
         line = re.sub(r'^(NAM-INDIA)Nippon', r'\1 Nippon', line)
-        
+
+        captured = None
         m = re.match(r'^([A-Z0-9&\-]{2,20}?)([A-Z][a-z]|\s)', line)
         if m:
-            sym = m.group(1).strip()
-            if sym not in NOISE_WORDS:
-                symbols.append(sym)
-                continue
-                
-        m2 = re.match(r'^([A-Z0-9&\-]+)', line)
-        if m2:
-            sym = m2.group(1).strip()
-            if sym not in NOISE_WORDS:
-                symbols.append(sym)
+            captured = m.group(1).strip()
+        else:
+            m2 = re.match(r'^([A-Z0-9&\-]+)', line)
+            if m2:
+                captured = m2.group(1).strip()
+
+        # C2 + C3: validate, then normalise renames/mergers.
+        if captured and _is_valid_symbol(captured):
+            symbols.append(_normalise_symbol(captured))
 
     return symbols
-
 
 def _extract_pdf_from_zip(zip_path: str, pdf_pattern: str) -> str | None:
     """Extract a PDF matching pattern from a ZIP, return path or None."""
@@ -179,6 +239,7 @@ def _extract_pdf_from_zip(zip_path: str, pdf_pattern: str) -> str | None:
 def parse_all() -> pd.DataFrame:
     print(f"\n[2/3] Parsing PDFs from each period...")
     all_records = []
+    last_full_nifty200: list[str] = []   # carry-forward state for C4
 
     for my in RECON_MONTHS:
         zip_path = os.path.join(DATA_DIR, f"{my}.zip")
@@ -187,7 +248,7 @@ def parse_all() -> pd.DataFrame:
             continue
 
         effective_date = EFFECTIVE_DATES[my]
-        symbols = []
+        symbols: list[str] = []
 
         # Try full NIFTY_200 PDF first
         pdf = _extract_pdf_from_zip(zip_path, rf"NIFTY_200_{my}\.pdf")
@@ -196,20 +257,40 @@ def parse_all() -> pd.DataFrame:
             os.remove(pdf)
             source = "NIFTY_200"
         else:
-            # Fallback: combine NIFTY_50 + NIFTY_Next_50 (= Nifty 100)
-            n50_pdf = _extract_pdf_from_zip(zip_path, rf"NIFTY_50_{my}\.pdf")
+            # Try NIFTY_50 + NIFTY_Next_50 (= Nifty 100)
+            n50_pdf  = _extract_pdf_from_zip(zip_path, rf"NIFTY_50_{my}\.pdf")
             nn50_pdf = _extract_pdf_from_zip(zip_path, rf"NIFTY_Next_50_{my}\.pdf")
 
+            partial: list[str] = []
             if n50_pdf:
-                symbols.extend(_parse_nifty_pdf(n50_pdf))
+                partial.extend(_parse_nifty_pdf(n50_pdf))
                 os.remove(n50_pdf)
             if nn50_pdf:
-                symbols.extend(_parse_nifty_pdf(nn50_pdf))
+                partial.extend(_parse_nifty_pdf(nn50_pdf))
                 os.remove(nn50_pdf)
-            source = "N50+NN50"
 
-        # Deduplicate
+            # C4 fix: when only N50/N100 PDFs are available, carry forward the
+            # previous full Nifty-200 list and merge in the fresh N100 names so
+            # we don't silently truncate the universe to 50/100 stocks for ~2yr.
+            # This is approximate (some additions/deletions are missed) but
+            # strictly better than a hard 50-name cap.
+            if partial and last_full_nifty200:
+                symbols = list(dict.fromkeys(partial + last_full_nifty200))
+                source = "N50+NN50+CARRY"
+            elif partial:
+                symbols = partial
+                source = "N50+NN50"
+            else:
+                # No PDFs — just carry the previous full list verbatim.
+                symbols = list(last_full_nifty200)
+                source = "CARRY_ONLY"
+
+        # Deduplicate (validators already applied per-line in _parse_nifty_pdf)
         symbols = list(dict.fromkeys(symbols))
+
+        # Track the most recent FULL Nifty 200 so we can carry it forward.
+        if source == "NIFTY_200" and len(symbols) >= 150:
+            last_full_nifty200 = list(symbols)
 
         for sym in symbols:
             all_records.append({
@@ -222,24 +303,27 @@ def parse_all() -> pd.DataFrame:
 
         print(f"  {my}: {len(symbols):>3} stocks ({source})")
 
-    # Add current live CSV data
+    # Add current live CSV data (with validator + rename map applied).
     csv_path = os.path.join(DATA_DIR, "nifty200_current.csv")
     if os.path.exists(csv_path):
         try:
             current = pd.read_csv(csv_path)
             sym_col = "Symbol" if "Symbol" in current.columns else current.columns[2]
-            current_symbols = current[sym_col].dropna().tolist()
-            for sym in current_symbols:
-                sym = str(sym).strip()
-                if sym and sym not in NOISE_WORDS:
-                    all_records.append({
-                        "effective_date": "2026-04-28",  # Latest available
-                        "period": "Apr2026",
-                        "symbol": sym,
-                        "ticker": sym + ".NS",
-                        "source": "live_csv",
-                    })
-            print(f"  Apr2026: {len(current_symbols):>3} stocks (live_csv)")
+            cleaned = []
+            for raw in current[sym_col].dropna():
+                s = str(raw).strip().upper()
+                if _is_valid_symbol(s):
+                    cleaned.append(_normalise_symbol(s))
+            cleaned = list(dict.fromkeys(cleaned))
+            for sym in cleaned:
+                all_records.append({
+                    "effective_date": "2026-04-28",
+                    "period": "Apr2026",
+                    "symbol": sym,
+                    "ticker": sym + ".NS",
+                    "source": "live_csv",
+                })
+            print(f"  Apr2026: {len(cleaned):>3} stocks (live_csv)")
         except Exception as e:
             print(f"  Current CSV error: {e}")
 
@@ -248,12 +332,35 @@ def parse_all() -> pd.DataFrame:
     return df
 
 
+INTERPOLATED_CSV = os.path.join(DATA_DIR, "universe_history_interpolated.csv")
+
+
+def _write_interpolated(df: pd.DataFrame) -> None:
+    """
+    Emit the per-rebalance ticker table that the backtester reads.
+
+    Schema: (ticker, effective_date)  — one row per (ticker, date) membership.
+
+    This rebuilds the file from scratch every run so junk tickers from a
+    previous parse can't sneak in. Same data as universe_history.csv but in
+    the (ticker, date) shape that data/universe/universe_history_interpolated.csv expects.
+    """
+    out = (df[["ticker", "effective_date"]]
+           .drop_duplicates()
+           .sort_values(["effective_date", "ticker"])
+           .reset_index(drop=True))
+    out.to_csv(INTERPOLATED_CSV, index=False)
+    print(f"  Saved: {INTERPOLATED_CSV} ({len(out)} rows)")
+
+
 # ── Build Universe ────────────────────────────────────────────────────────
 def build_universe(df: pd.DataFrame):
     print(f"\n[3/3] Building universe history...")
 
     df.to_csv(OUTPUT_CSV, index=False)
     print(f"  Saved: {OUTPUT_CSV} ({len(df)} rows)")
+
+    _write_interpolated(df)
 
     superset = set(df["ticker"].unique())
     print(f"  Superset: {len(superset)} unique stocks across all periods")

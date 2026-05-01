@@ -43,8 +43,6 @@ def main():
     print("═"*62)
     print(" NSE 200 · 7-FACTOR PORTFOLIO SYSTEM")
     print(f" Mode: {'REAL DATA' if USE_REAL_DATA else 'MOCK DATA (set USE_REAL_DATA=True for real)'}")
-    if USE_REAL_DATA:
-        print(" Tip: Run python3 diagnose.py first to check your data endpoints")
     print("═"*62)
 
     # ── [1] Load data ──────────────────────────────────────────────────────

@@ -1,6 +1,10 @@
 venv/
 __pycache__/
 *.pyc
+.DS_Store
 
 # Run outputs
 output/
+
+# Universe builder raw downloads (re-fetchable from niftyindices.com)
+data/universe/*.zip

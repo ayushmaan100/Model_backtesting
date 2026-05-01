@@ -158,9 +158,13 @@ def compute_raw_metrics(
 
     One row per stock. Stocks missing momentum data are excluded.
     """
-    # 0. Apply universe mask right away to prices if given
+    # 0. Apply universe mask right away to prices if given.
+    # CRITICAL: must keep NIFTY_TICKER (^NSEI) so compute_rolling_betas can run.
+    # The earlier hardcoded 'Nifty50' literal stripped the index → beta=1.0 for
+    # everyone → Beta factor IC dropped to NaN. (C1 fix.)
     if active_universe is not None:
-        prices_df = prices_df[[c for c in prices_df.columns if c in active_universe or c == 'Nifty50']]
+        keep = [c for c in prices_df.columns if c in active_universe or c == NIFTY_TICKER]
+        prices_df = prices_df[keep]
 
     # 1. Momentum & Beta from Point-in-Time Prices
     mom = compute_momentum_scores(prices_df, as_of_date)
@@ -196,9 +200,28 @@ def compute_raw_metrics(
 
     raw = raw.dropna(how="all")
 
+    # H3 fix: data-completeness gate.
+    # A stock must have at minimum:
+    #   - momentum (already enforced — needs 13 months of prices)
+    #   - at least 3 of the 5 fundamental factors populated (i.e. an actual PiT
+    #     fundamentals row, not just propped up by Rank-3 NaN defaults)
+    # Otherwise it gets dropped from the universe at this date. Previously such
+    # stocks were quietly scored on Mom + Beta with Rank-3 fills on the missing
+    # factors and could trade their way into the portfolio on a pure-momentum
+    # signal alone.
+    fund_cols = [c for c in fund_map.keys() if c in raw.columns]
+    if fund_cols:
+        n_present = raw[fund_cols].notna().sum(axis=1)
+        n_dropped = int((n_present < 3).sum())
+        raw = raw[n_present >= 3]
+    else:
+        n_dropped = 0
+
     # Pass through filter stats for logging
     if hasattr(fund_snapshot, 'attrs') and '_filter_stats' in fund_snapshot.attrs:
-        raw.attrs['_filter_stats'] = fund_snapshot.attrs['_filter_stats']
+        stats = dict(fund_snapshot.attrs['_filter_stats'])
+        stats['data_poor_dropped'] = n_dropped
+        raw.attrs['_filter_stats'] = stats
 
     return raw
 
@@ -405,8 +428,6 @@ def _print_results(scored_df: pd.DataFrame, portfolio: pd.DataFrame):
     cutoff = scored_df["Final_Score"].iloc[n-1]
     next_  = scored_df["Final_Score"].iloc[n]   if len(scored_df) > n else 0
     mean   = scored_df["Final_Score"].mean()
-
-    rank_cols = [f"Rank_{f}" for f in WEIGHTS]
 
     print(f"\n{'─'*62}")
     print(f" FACTOR ENGINE RESULTS  |  {total} stocks scored  |  top {n} selected")

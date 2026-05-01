@@ -1,27 +1,21 @@
 """
-dashboard.py — Phase-2 analytical dashboard.
+dashboard.py — Vue-based analytical dashboard.
 
 Single-file HTML dashboard rendered from real backtest + analytics outputs.
-EVERY chart and table is driven from computed data (no hardcoded percentages,
-correlations, or regime numbers).
 
-Tabs:
-  1. Overview        — equity curve, rolling 12M Sharpe/α/β, annual returns,
-                       monthly drawdown.
-  2. Attribution     — single-factor backtests (7 + multi), final values,
-                       computed factor-regime heatmap.
-  3. Diagnostics     — Information Coefficient, quintile spreads, computed
-                       cross-factor correlations.
-  4. Composition     — current top-25 heatmap, sector exposure over time,
-                       holdings transition table.
-  5. Rebalance       — full rebalance log, per-period winners/losers,
-                       cost & turnover trend.
-  6. Universe        — searchable, sortable ranking of all stocks.
-  7. Stocks          — per-stock drill-down: price, score history, rank
-                       trajectory, in-portfolio timeline.
-  8. Model           — factor descriptions, weights, pipeline, methodology,
-                       known limitations.
+Current tabs (Vue-driven sidebar):
+  1. Overview     — equity curve, drawdown, rolling 12M Sharpe/Alpha.
+  2. Composition  — current top-25 heatmap, sector exposure over time.
+  3. Factors      — single-factor backtests, IC, factor performance summary.
+  4. Sandbox      — interactive factor-weight slider, recomputed top-25 live.
+  5. Compare      — pick any two stocks, compare current factor ranks (radar).
+  6. Logs         — rebalance history table.
+
+NOTE: Several analytics blocks are computed and shipped to the JS payload
+(`qs`, `regime`, `corr`, `transitions`, `ct`, per-stock score history) but
+not yet wired into the Vue template. Future dashboard work will surface them.
 """
+
 
 from __future__ import annotations
 
@@ -38,7 +32,6 @@ from config import (
 )
 from sectors import sector_of
 import analytics as A
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # JSON helper
@@ -72,7 +65,7 @@ def _to_chart_series(idx, vals):
 def build_dashboard(
     scored_df:        pd.DataFrame,
     portfolio:        pd.DataFrame,
-    backtest_results: dict,
+    backtest_results: dict, 
     output_path:      str   = "dashboard.html",
     initial_capital:  float = 500_000,
     prices_df:        pd.DataFrame | None = None,
@@ -97,7 +90,7 @@ def build_dashboard(
         "labels":   [str(d.date()) for d in port_curve.index],
         "port":     [round(v / p0 * 100, 2) for v in port_curve.values],
         "nifty":    [round(v / n0 * 100, 2) if pd.notna(v) else None for v in nifty_aligned.values],
-        "port_inr": [round(float(v))            for v in port_curve.values],
+        "port_inr": [round(float(v)) for v in port_curve.values],
     }
 
     # Drawdown (monthly, real)
@@ -401,992 +394,1322 @@ def build_dashboard(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _render_html(K: dict, JS: dict) -> str:
-    js = json.dumps(JS, default=_safe)
-    F_COLORS = ["#378ADD","#1D9E75","#EF9F27","#D85A30","#7F77DD","#5DCAA5","#D4537E"]
-
+    import json
+    js = json.dumps(JS)
+    
     return f"""<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NSE 200 · 7-Factor Portfolio · {K['run_date']}</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<style>
-:root{{
-  --bg:#0F1117; --card:#1A1D27; --card2:#20253A;
-  --border:rgba(255,255,255,0.08); --text:#E8EAF0; --sub:#8B90A0;
-  --jade:#1D9E75; --amber:#EF9F27; --rust:#D85A30; --blue:#378ADD;
-  --r5:#1D9E75; --r4:rgba(29,158,117,.55); --r3:#4A5568; --r2:#EF9F27; --r1:#D85A30;
-}}
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-     background:var(--bg);color:var(--text);font-size:13px;line-height:1.5}}
-.mono{{font-family:'JetBrains Mono','Fira Code','Courier New',monospace}}
-a{{color:var(--blue);text-decoration:none}}
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quant Portfolio Analytics</title>
+    
+    <!-- Fonts & Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    
+    <!-- Vue.js for Reactivity -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        :root {{
+            --bg-base: #0B0E14;
+            --bg-surface: #151821;
+            --bg-card: rgba(26, 30, 41, 0.6);
+            --border: rgba(255, 255, 255, 0.06);
+            --text-main: #E2E8F0;
+            --text-muted: #8F9EB2;
+            
+            --accent: #3B82F6;
+            --accent-glow: rgba(59, 130, 246, 0.3);
+            --success: #10B981;
+            --danger: #EF4444;
+            --warning: #F59E0B;
+            
+            --font-sans: 'Inter', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }}
+        
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        
+        body {{
+            font-family: var(--font-sans);
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }}
+        
+        /* Sidebar */
+        .sidebar {{
+            width: 260px;
+            background: var(--bg-surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 24px 0;
+            z-index: 10;
+        }}
+        
+        .brand {{
+            padding: 0 24px 24px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 12px;
+        }}
+        
+        .brand-title {{
+            font-size: 18px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #E2E8F0 0%, #8F9EB2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+        
+        .nav-item {{
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+            font-weight: 500;
+        }}
+        
+        .nav-item i {{ font-size: 18px; }}
+        
+        .nav-item:hover {{ color: var(--text-main); background: rgba(255,255,255,0.02); }}
+        .nav-item.active {{
+            color: var(--accent);
+            background: linear-gradient(90deg, rgba(59,130,246,0.1) 0%, transparent 100%);
+            border-left: 3px solid var(--accent);
+        }}
+        
+        /* Main Content */
+        .main-content {{
+            flex: 1;
+            overflow-y: auto;
+            padding: 32px 40px;
+            scroll-behavior: smooth;
+        }}
+        
+        .main-content::-webkit-scrollbar {{ width: 6px; }}
+        .main-content::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 3px; }}
+        
+        .page-header {{ margin-bottom: 32px; }}
+        .page-title {{ font-size: 24px; font-weight: 600; margin-bottom: 8px; }}
+        .page-desc {{ color: var(--text-muted); font-size: 14px; }}
+        
+        /* Grid Layouts */
+        .grid-cols-4 {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }}
+        .grid-cols-2 {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }}
+        
+        /* Glass Cards */
+        .card {{
+            background: var(--bg-card);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }}
+        .card:hover {{
+            box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+        }}
+        
+        .card-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }}
+        
+        .card-title {{ font-size: 14px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }}
+        
+        /* KPI Styles */
+        .kpi-value {{
+            font-size: 32px;
+            font-weight: 600;
+            font-family: var(--font-mono);
+            margin-bottom: 4px;
+        }}
+        .kpi-sub {{ font-size: 13px; color: var(--text-muted); }}
+        
+        .text-success {{ color: var(--success); }}
+        .text-danger {{ color: var(--danger); }}
+        .text-accent {{ color: var(--accent); }}
+        
+        /* Charts */
+        .chart-container {{ position: relative; height: 300px; width: 100%; }}
+        
+        /* Tables */
+        .table-container {{ overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); }}
+        table {{ width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }}
+        th {{ padding: 12px 16px; background: rgba(255,255,255,0.02); color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border); }}
+        td {{ padding: 12px 16px; border-bottom: 1px solid var(--border); }}
+        tr:hover td {{ background: rgba(255,255,255,0.02); }}
+        
+        /* Sandbox sliders */
+        .slider-group {{ margin-bottom: 16px; }}
+        .slider-label {{ display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }}
+        input[type=range] {{
+            -webkit-appearance: none; width: 100%; background: transparent; 
+        }}
+        input[type=range]::-webkit-slider-thumb {{
+            -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%;
+            background: var(--accent); cursor: pointer; margin-top: -6px;
+        }}
+        input[type=range]::-webkit-slider-runnable-track {{
+            width: 100%; height: 4px; cursor: pointer; background: var(--border); border-radius: 2px;
+        }}
+        
+        .btn {{
+            background: var(--accent); color: white; border: none; padding: 10px 20px;
+            border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer;
+            transition: background 0.2s;
+        }}
+        .btn:hover {{ background: #2563EB; }}
+        
+        /* Comparison */
+        .compare-select {{
+            background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-main);
+            padding: 10px; border-radius: 8px; width: 100%; font-size: 14px; outline: none;
+        }}
+        
+        .fade-enter-active, .fade-leave-active {{ transition: opacity 0.3s ease; }}
+        .fade-enter-from, .fade-leave-to {{ opacity: 0; }}
+        
+        /* Rank badges */
+        .rank-badge {{
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 24px; height: 24px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+        }}
+        .r5 {{ background: rgba(16, 185, 129, 0.2); color: var(--success); }}
+        .r4 {{ background: rgba(16, 185, 129, 0.1); color: var(--success); }}
+        .r3 {{ background: rgba(143, 158, 178, 0.1); color: var(--text-muted); }}
+        .r2 {{ background: rgba(245, 158, 11, 0.1); color: var(--warning); }}
+        .r1 {{ background: rgba(239, 68, 68, 0.2); color: var(--danger); }}
+        
+    </style>
+</head>
+<body>
 
-.wrap{{max-width:1500px;margin:0 auto;padding:16px}}
-.grid2{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}
-.grid3{{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}}
-.grid4{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}}
-.grid6{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}}
-.grid8{{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}}
-@media(max-width:900px){{.grid2,.grid3{{grid-template-columns:1fr}}}}
-
-.card{{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px}}
-.card-sm{{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px}}
-
-.kpi-label{{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--sub);margin-bottom:4px}}
-.kpi-value{{font-size:21px;font-weight:600;font-family:'JetBrains Mono',monospace;line-height:1}}
-.kpi-sub{{font-size:11px;color:var(--sub);margin-top:3px}}
-.pos{{color:var(--jade)}}.neg{{color:var(--rust)}}.neu{{color:var(--amber)}}
-
-.section{{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;
-         color:var(--sub);margin:24px 0 10px;padding-left:2px}}
-
-.tabs{{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:18px;overflow-x:auto}}
-.tab{{padding:9px 14px;font-size:12px;font-weight:500;cursor:pointer;
-     border-radius:8px 8px 0 0;border:1px solid transparent;border-bottom:none;
-     color:var(--sub);background:transparent;transition:all .15s;white-space:nowrap}}
-.tab.active{{background:var(--card);color:var(--text);border-color:var(--border);
-            border-bottom-color:var(--card)}}
-.tab-content{{display:none}}.tab-content.active{{display:block}}
-
-.pip{{display:inline-flex;align-items:center;justify-content:center;
-     width:22px;height:22px;border-radius:4px;font-size:11px;font-weight:700;
-     color:white;font-family:'JetBrains Mono',monospace}}
-.r5{{background:var(--r5)}}.r4{{background:var(--r4)}}
-.r3{{background:var(--r3)}}.r2{{background:var(--r2)}}.r1{{background:var(--r1)}}
-
-.tbl{{width:100%;border-collapse:collapse;font-size:12px}}
-.tbl th{{color:var(--sub);font-weight:500;text-align:left;padding:7px 10px;
-        border-bottom:1px solid var(--border);font-size:11px;
-        cursor:pointer;user-select:none;white-space:nowrap}}
-.tbl th:hover{{color:var(--text)}}
-.tbl td{{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:middle}}
-.tbl tr:hover td{{background:rgba(255,255,255,.03)}}
-.tbl tr.in-port td{{background:rgba(29,158,117,.06)}}
-.sticky-head th{{position:sticky;top:0;background:var(--card);z-index:1}}
-
-.search-row{{display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap}}
-.search-input{{flex:1;max-width:280px;padding:6px 12px;background:var(--card2);
-              border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:12px}}
-.search-input::placeholder{{color:var(--sub)}}
-.badge{{display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:600}}
-.badge-in{{background:rgba(29,158,117,.2);color:var(--jade)}}
-.badge-warn{{background:rgba(239,159,39,.2);color:var(--amber)}}
-.badge-info{{background:rgba(55,138,221,.2);color:var(--blue)}}
-.badge-sec{{background:rgba(255,255,255,.04);color:var(--sub);font-weight:400}}
-
-.chart-wrap{{position:relative}}
-.tbl-scroll{{overflow-x:auto;max-height:520px;overflow-y:auto}}
-.tbl-scroll::-webkit-scrollbar{{width:4px;height:4px}}
-.tbl-scroll::-webkit-scrollbar-thumb{{background:var(--border);border-radius:2px}}
-
-.heatmap-cell{{width:30px;height:24px;border-radius:4px;display:inline-flex;
-              align-items:center;justify-content:center;font-size:10px;
-              font-weight:600;color:white}}
-
-.legend-row{{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;align-items:center;font-size:11px}}
-.legend-dot{{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:5px}}
-.legend-sq{{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:5px}}
-
-.prog-bar{{height:6px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,.08)}}
-.prog-fill{{height:100%;border-radius:3px;transition:width .5s}}
-
-.alert{{padding:10px 14px;border-radius:8px;font-size:12px;margin-bottom:12px;border-left:3px solid}}
-.alert-ok{{background:rgba(29,158,117,.1);border-color:var(--jade);color:var(--jade)}}
-.alert-warn{{background:rgba(239,159,39,.1);border-color:var(--amber);color:var(--amber)}}
-.alert-info{{background:rgba(55,138,221,.08);border-color:var(--blue);color:var(--text)}}
-
-.stock-pill{{display:inline-block;padding:4px 9px;background:var(--card2);
-             border:1px solid var(--border);border-radius:14px;font-size:11px;
-             margin:2px;cursor:pointer;color:var(--sub)}}
-.stock-pill:hover{{color:var(--text);border-color:var(--blue)}}
-.stock-pill.active{{background:var(--blue);color:white;border-color:var(--blue)}}
-
-.fact-card{{background:var(--card2);border:1px solid var(--border);border-radius:8px;
-            padding:12px;margin-bottom:8px}}
-.fact-name{{font-weight:600;color:var(--text);font-size:13px}}
-.fact-meta{{font-size:11px;color:var(--sub);margin-top:2px}}
-.fact-desc{{font-size:12px;color:var(--text);margin-top:6px;line-height:1.55}}
-</style>
-</head><body>
-<div class="wrap">
-
-<!-- HEADER -->
-<div style="display:flex;align-items:flex-start;justify-content:space-between;
-            margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-  <div>
-    <div style="font-size:11px;color:var(--sub);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">
-      NSE 200 · Quantitative Factor Investing · Phase 2
-    </div>
-    <h1 style="font-size:26px;font-weight:700;letter-spacing:-.5px">
-      7-Factor Portfolio · Analytical Dashboard
-    </h1>
-    <div style="font-size:12px;color:var(--sub);margin-top:6px">
-      {K['inception']} → {K['end']}  ·  Universe {K['n_universe']} stocks  ·
-      Portfolio top {K['n_stocks']} (equal-weight)  ·  {K['n_rebal']} rebalances  ·
-      Run {K['run_date']}
-    </div>
-  </div>
-  <div style="text-align:right">
-    <div class="badge badge-info" style="font-size:11px;padding:4px 10px">
-      Capital {K['init_val']} → {K['final_val']}
-    </div>
-    <div style="font-size:10px;color:var(--sub);margin-top:6px">
-      Cost {K['tcost']}/side · RFR {K['rf']}
-    </div>
-  </div>
-</div>
-
-<!-- KPI -->
-<div class="section">Performance Summary · vs Nifty 50</div>
-<div class="grid6" style="margin-bottom:20px">
-  <div class="card-sm">
-    <div class="kpi-label">CAGR</div>
-    <div class="kpi-value mono {('pos' if '+' in K['cagr'] else 'neg')}">{K['cagr']}</div>
-    <div class="kpi-sub">Nifty: {K['nifty_cagr']}</div>
-  </div>
-  <div class="card-sm">
-    <div class="kpi-label">Alpha vs Nifty</div>
-    <div class="kpi-value mono {('pos' if '+' in K['alpha'] else 'neg')}">{K['alpha']}</div>
-    <div class="kpi-sub">annualised excess</div>
-  </div>
-  <div class="card-sm">
-    <div class="kpi-label">Max Drawdown</div>
-    <div class="kpi-value mono neg">{K['maxdd']}</div>
-    <div class="kpi-sub">Nifty: {K['nifty_dd']}</div>
-  </div>
-  <div class="card-sm">
-    <div class="kpi-label">Sharpe</div>
-    <div class="kpi-value mono">{K['sharpe']}</div>
-    <div class="kpi-sub">Sortino: {K['sortino']}</div>
-  </div>
-  <div class="card-sm">
-    <div class="kpi-label">Calmar</div>
-    <div class="kpi-value mono pos">{K['calmar']}</div>
-    <div class="kpi-sub">CAGR / |MaxDD|</div>
-  </div>
-  <div class="card-sm">
-    <div class="kpi-label">Total Return</div>
-    <div class="kpi-value mono pos" style="font-size:18px">{K['total_ret']}</div>
-    <div class="kpi-sub">Win rate: {K['winrate']}  ·  Vol {K['vol']}</div>
-  </div>
-</div>
-
-<!-- TABS -->
-<div class="tabs">
-  <div class="tab active" onclick="goTab(event,'t-overview')">📈 Overview</div>
-  <div class="tab" onclick="goTab(event,'t-attr')">🔬 Attribution</div>
-  <div class="tab" onclick="goTab(event,'t-diag')">🧪 Factor Diagnostics</div>
-  <div class="tab" onclick="goTab(event,'t-comp')">🧬 Composition</div>
-  <div class="tab" onclick="goTab(event,'t-rebal')">🔄 Rebalance</div>
-  <div class="tab" onclick="goTab(event,'t-univ')">🌐 Universe</div>
-  <div class="tab" onclick="goTab(event,'t-stocks')">📋 Stocks</div>
-  <div class="tab" onclick="goTab(event,'t-model')">📚 Model</div>
-</div>
-
-<!-- ── TAB: OVERVIEW ─────────────────────────────────────────────────── -->
-<div id="t-overview" class="tab-content active">
-  <div class="card">
-    <div class="section" style="margin-top:0">Equity Curve · Base = 100 · Monthly</div>
-    <div class="legend-row">
-      <span><span class="legend-dot" style="background:#378ADD"></span>7-Factor Portfolio</span>
-      <span><span class="legend-dot" style="background:#888;opacity:.6"></span>Nifty 50</span>
-    </div>
-    <div class="chart-wrap" style="height:340px"><canvas id="cEquity"></canvas></div>
-  </div>
-
-  <div class="grid2" style="margin-top:16px">
-    <div class="card">
-      <div class="section" style="margin-top:0">Monthly Drawdown · % below peak</div>
-      <div class="chart-wrap" style="height:240px"><canvas id="cDD"></canvas></div>
-      <div style="font-size:11px;color:var(--sub);margin-top:8px">
-        Real monthly drawdown, computed off the monthly equity curve.
-      </div>
-    </div>
-    <div class="card">
-      <div class="section" style="margin-top:0">Annual Returns · Real Jan→Dec</div>
-      <div class="chart-wrap" style="height:240px"><canvas id="cAnnual"></canvas></div>
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:16px">
-    <div class="section" style="margin-top:0">Rolling 12-Month Metrics — when did it work?</div>
-    <div class="legend-row">
-      <span><span class="legend-dot" style="background:#1D9E75"></span>Rolling Sharpe</span>
-      <span><span class="legend-dot" style="background:#EF9F27"></span>Rolling Alpha (vs Nifty)</span>
-      <span><span class="legend-dot" style="background:#D4537E"></span>Rolling Beta</span>
-    </div>
-    <div class="chart-wrap" style="height:280px"><canvas id="cRolling"></canvas></div>
-    <div style="font-size:11px;color:var(--sub);margin-top:8px">
-      Trailing 12-month windows. A flat-or-falling rolling Sharpe is your earliest
-      warning that the model is regime-shifting.
-    </div>
-  </div>
-</div>
-
-<!-- ── TAB: ATTRIBUTION ───────────────────────────────────────────────── -->
-<div id="t-attr" class="tab-content">
-  <div class="alert alert-info">
-    <strong>What this replaces:</strong> the old dashboard hardcoded factor attribution
-    as fixed percentages. This page <em>computes</em> a single-factor backtest for each factor —
-    same universe, same rebalances, weight=1.0 on that factor only. The terminal CAGR
-    and drawdown of each line is the honest contribution.
-  </div>
-  <div class="card">
-    <div class="section" style="margin-top:0">Single-Factor vs Multi-Factor · Equity Curves (Base=100)</div>
-    <div class="chart-wrap" style="height:380px"><canvas id="cSF"></canvas></div>
-    <div id="sfLegend" class="legend-row" style="margin-top:10px"></div>
-  </div>
-
-  <div class="grid2" style="margin-top:16px">
-    <div class="card">
-      <div class="section" style="margin-top:0">Per-Factor Performance</div>
-      <table class="tbl"><thead><tr>
-        <th>Factor</th><th>Weight</th><th>CAGR</th><th>Total Ret</th><th>Max DD</th>
-      </tr></thead><tbody id="sfTable"></tbody></table>
-    </div>
-    <div class="card">
-      <div class="section" style="margin-top:0">Factor Regime · Per-Year Quintile Spread (Q5−Q1, %)</div>
-      <div id="regimeTable" style="overflow-x:auto"></div>
-      <div style="font-size:11px;color:var(--sub);margin-top:8px">
-        Positive = top quintile beat bottom quintile that year. Computed, not hardcoded.
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ── TAB: DIAGNOSTICS ───────────────────────────────────────────────── -->
-<div id="t-diag" class="tab-content">
-  <div class="alert alert-info">
-    Two gold-standard factor tests: <strong>Information Coefficient</strong> (rank
-    correlation between a factor's value and the next period's stock return) and
-    <strong>Quintile Spread</strong> (top quintile mean return minus bottom). A factor
-    that doesn't deliver consistently positive numbers here probably shouldn't be in your model.
-  </div>
-
-  <div class="grid2">
-    <div class="card">
-      <div class="section" style="margin-top:0">Information Coefficient · Mean per Factor</div>
-      <div class="chart-wrap" style="height:260px"><canvas id="cIC"></canvas></div>
-      <div style="font-size:11px;color:var(--sub);margin-top:8px">
-        Spearman rank-correlation between factor value at t and forward return (t→t+1).
-        Sign-flipped for lower-is-better factors. ≥0.05 is decent; ≥0.10 is strong.
-      </div>
-    </div>
-    <div class="card">
-      <div class="section" style="margin-top:0">Hit Rate · % of Periods with Positive IC</div>
-      <div class="chart-wrap" style="height:260px"><canvas id="cHit"></canvas></div>
-      <div style="font-size:11px;color:var(--sub);margin-top:8px">
-        How consistently the factor was on the right side. 50% = coin flip.
-      </div>
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:16px">
-    <div class="section" style="margin-top:0">Quintile Spread · Q5 minus Q1 forward return (mean)</div>
-    <div class="chart-wrap" style="height:240px"><canvas id="cQS"></canvas></div>
-    <div style="font-size:11px;color:var(--sub);margin-top:8px">
-      Equal-weighted Q5 forward return minus equal-weighted Q1 forward return,
-      averaged across rebalances. Bigger spread = factor genuinely separates winners from losers.
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:16px">
-    <div class="section" style="margin-top:0">Cross-Factor Correlation (computed, Spearman, averaged)</div>
-    <div id="corrTable" style="overflow-x:auto"></div>
-    <div style="font-size:11px;color:var(--sub);margin-top:8px">
-      Average cross-sectional rank correlation across all rebalance dates.
-      Negative entries = genuine diversification.
-    </div>
-  </div>
-</div>
-
-<!-- ── TAB: COMPOSITION ──────────────────────────────────────────────── -->
-<div id="t-comp" class="tab-content">
-  <div class="card">
-    <div class="section" style="margin-top:0">Current Top {K['n_stocks']} · Factor Heatmap</div>
-    <div class="legend-row">
-      <span><span class="pip r5">5</span>Top 20%</span>
-      <span><span class="pip r4">4</span>Top 40%</span>
-      <span><span class="pip r3">3</span>Mid</span>
-      <span><span class="pip r2">2</span>Bot 40%</span>
-      <span><span class="pip r1">1</span>Bot 20%</span>
-    </div>
-    <div style="overflow-x:auto">
-      <table class="tbl"><thead><tr>
-        <th>#</th><th>Stock</th><th>Sector</th><th>Score</th>
-        <th>Mom</th><th>Qua</th><th>Val</th><th>Siz</th><th>Bet</th><th>Inv</th><th>Yld</th>
-        <th>Bar</th>
-      </tr></thead><tbody id="heatBody"></tbody></table>
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:16px">
-    <div class="section" style="margin-top:0">Sector Exposure Over Time · % of portfolio</div>
-    <div class="chart-wrap" style="height:340px"><canvas id="cSector"></canvas></div>
-    <div style="font-size:11px;color:var(--sub);margin-top:8px">
-      Where the model concentrated risk by sector at each rebalance.
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:16px">
-    <div class="section" style="margin-top:0">Holdings Transitions · Per Rebalance</div>
-    <div class="tbl-scroll">
-      <table class="tbl sticky-head"><thead><tr>
-        <th>Date</th><th>Size</th><th>New (in)</th><th>Removed (out)</th>
-      </tr></thead><tbody id="transBody"></tbody></table>
-    </div>
-  </div>
-</div>
-
-<!-- ── TAB: REBALANCE ─────────────────────────────────────────────────── -->
-<div id="t-rebal" class="tab-content">
-  <div class="card">
-    <div class="section" style="margin-top:0">Rebalance Log · Click row for winners/losers</div>
-    <div class="tbl-scroll">
-      <table class="tbl sticky-head"><thead><tr>
-        <th>Date</th><th>Value</th><th>Period Ret</th><th>Nifty Ret</th><th>Alpha</th>
-        <th>Turn</th><th>In</th><th>Out</th><th>Cost</th>
-      </tr></thead><tbody id="rebalBody"></tbody></table>
-    </div>
-  </div>
-
-  <div class="grid2" style="margin-top:16px">
-    <div class="card">
-      <div class="section" style="margin-top:0">Cost & Turnover Trend</div>
-      <div class="chart-wrap" style="height:240px"><canvas id="cCT"></canvas></div>
-    </div>
-    <div class="card" id="rebalDetail">
-      <div class="section" style="margin-top:0">Period Detail · Click a row above</div>
-      <div style="font-size:12px;color:var(--sub)">Click any row in the rebalance log to see the top winners and losers from that period.</div>
-    </div>
-  </div>
-</div>
-
-<!-- ── TAB: UNIVERSE ──────────────────────────────────────────────────── -->
-<div id="t-univ" class="tab-content">
-  <div class="card">
-    <div class="section" style="margin-top:0">Universe · {K['n_universe']} stocks</div>
-    <div class="search-row">
-      <input class="search-input" type="text" id="univSearch" placeholder="Search ticker or sector…" oninput="filterUniv()">
-      <select id="univSector" onchange="filterUniv()" class="search-input" style="max-width:180px"></select>
-      <label style="font-size:11px;color:var(--sub);display:flex;align-items:center;gap:4px">
-        <input type="checkbox" id="univPortOnly" onchange="filterUniv()"> Portfolio only
-      </label>
-      <span id="univCount" style="font-size:11px;color:var(--sub);margin-left:auto"></span>
-    </div>
-    <div class="tbl-scroll">
-      <table class="tbl sticky-head"><thead><tr>
-        <th onclick="sortUniv('rank')"># ▼</th>
-        <th onclick="sortUniv('ticker')">Ticker</th>
-        <th>Sector</th>
-        <th onclick="sortUniv('score')">Score</th>
-        <th>Mom</th><th>Qua</th><th>Val</th><th>Siz</th><th>Bet</th><th>Inv</th><th>Yld</th>
-      </tr></thead><tbody id="univBody"></tbody></table>
-    </div>
-  </div>
-</div>
-
-<!-- ── TAB: STOCKS (DRILL-DOWN) ───────────────────────────────────────── -->
-<div id="t-stocks" class="tab-content">
-  <div class="card">
-    <div class="section" style="margin-top:0">Per-Stock Drill-Down</div>
-    <div class="search-row">
-      <input class="search-input" type="text" id="stockSearch" placeholder="Type to search a ticker (e.g. INFY, HDFCBANK)…" oninput="filterStockPills()">
-      <span id="stockMeta" style="font-size:11px;color:var(--sub);margin-left:auto"></span>
-    </div>
-    <div id="stockPills" style="margin-bottom:12px;max-height:90px;overflow-y:auto"></div>
-    <div id="stockBody" style="display:none">
-      <div class="grid2">
-        <div>
-          <div class="section" style="margin-top:0">Price · since inception</div>
-          <div class="chart-wrap" style="height:230px"><canvas id="cStockPx"></canvas></div>
+<div id="app" style="display: flex; width: 100%;">
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="brand">
+            <div class="brand-title">QuantCore</div>
+            <div style="font-size: 12px; color: var(--text-muted);">NSE 200 Factor Engine</div>
         </div>
-        <div>
-          <div class="section" style="margin-top:0">Composite Score Over Time</div>
-          <div class="chart-wrap" style="height:230px"><canvas id="cStockScore"></canvas></div>
+        
+        <div class="nav-item" :class="{{active: activeTab === 'overview'}}" @click="activeTab = 'overview'">
+            <i class="ri-dashboard-line"></i> Dashboard
         </div>
-      </div>
-      <div style="margin-top:14px">
-        <div class="section">Factor Rank Trajectory</div>
-        <div id="stockRankTable" style="overflow-x:auto"></div>
-      </div>
-      <div style="margin-top:14px">
-        <div class="section">In-Portfolio Timeline</div>
-        <div id="stockPortTimeline" style="overflow-x:auto"></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ── TAB: MODEL ─────────────────────────────────────────────────────── -->
-<div id="t-model" class="tab-content">
-  <div class="grid2">
-    <div class="card">
-      <div class="section" style="margin-top:0">The 7 Factors</div>
-      <div id="factorList"></div>
-    </div>
-    <div>
-      <div class="card">
-        <div class="section" style="margin-top:0">Factor Weights</div>
-        <div class="chart-wrap" style="height:220px"><canvas id="cWeights"></canvas></div>
-      </div>
-      <div class="card" style="margin-top:16px">
-        <div class="section" style="margin-top:0">Pipeline (Daily → Dashboard)</div>
-        <div style="font-size:12px;line-height:2">
-          <div><strong>1.</strong> screener_scraper.py → screener_raw.csv</div>
-          <div><strong>2.</strong> build_pit.py → fundamentals_pit.csv (3-month lag)</div>
-          <div><strong>3.</strong> data_layer · yfinance → prices.csv  + shares_outstanding.csv</div>
-          <div><strong>4.</strong> factor_engine · momentum + 5 fundamentals + beta → 7 raw factors → quintile rank → composite</div>
-          <div><strong>5.</strong> backtester · semi-annual rebalance + monthly equity walk</div>
-          <div><strong>6.</strong> analytics · single-factor BTs, IC, attribution, sector tilt</div>
-          <div><strong>7.</strong> dashboard · this page</div>
+        <div class="nav-item" :class="{{active: activeTab === 'composition'}}" @click="activeTab = 'composition'">
+            <i class="ri-pie-chart-line"></i> Portfolio Comp
         </div>
-      </div>
+        <div class="nav-item" :class="{{active: activeTab === 'factors'}}" @click="activeTab = 'factors'">
+            <i class="ri-bar-chart-grouped-line"></i> Factor Attribution
+        </div>
+        <div class="nav-item" :class="{{active: activeTab === 'diagnostics'}}" @click="activeTab = 'diagnostics'">
+            <i class="ri-microscope-line"></i> Factor Diagnostics
+        </div>
+        <div class="nav-item" :class="{{active: activeTab === 'sandbox'}}" @click="activeTab = 'sandbox'">
+            <i class="ri-equalizer-line"></i> Model Sandbox
+        </div>
+        <div class="nav-item" :class="{{active: activeTab === 'compare'}}" @click="activeTab = 'compare'">
+            <i class="ri-scales-3-line"></i> Stock Comparison
+        </div>
+        <div class="nav-item" :class="{{active: activeTab === 'drilldown'}}" @click="activeTab = 'drilldown'">
+            <i class="ri-search-eye-line"></i> Stock Drill-Down
+        </div>
+        <div class="nav-item" :class="{{active: activeTab === 'universe'}}" @click="activeTab = 'universe'">
+            <i class="ri-grid-line"></i> Universe
+        </div>
+        <div class="nav-item" :class="{{active: activeTab === 'logs'}}" @click="activeTab = 'logs'">
+            <i class="ri-history-line"></i> Rebalance Logs
+        </div>
+        <div class="nav-item" :class="{{active: activeTab === 'model'}}" @click="activeTab = 'model'">
+            <i class="ri-book-open-line"></i> Model
+        </div>
     </div>
-  </div>
 
-  <div class="card" style="margin-top:16px">
-    <div class="section" style="margin-top:0">Methodology</div>
-    <div style="font-size:12px;line-height:1.7">
-      <p><strong>Momentum:</strong> 0.4·Ret(T-4 → T-2) + 0.6·Ret(T-12 → T-5). T-1 is skipped to avoid short-term reversal.</p>
-      <p><strong>Beta:</strong> 36-month rolling OLS slope vs Nifty 50, clipped to [0.1, 4.0].</p>
-      <p><strong>Quality:</strong> Operating Profit / Total Assets (latest available with 3-month institutional lag).</p>
-      <p><strong>Value:</strong> Book-to-Market = Equity / Price (computed at rebalance).</p>
-      <p><strong>Size:</strong> Market Cap = Price × shares-outstanding (yfinance current snapshot, split/bonus-corrected via auto_adjust prices). Falls back to Total Assets when shares unavailable.</p>
-      <p><strong>Investment:</strong> YoY Total-Assets growth.</p>
-      <p><strong>Yield:</strong> EPS × Dividend Payout % / Price. Missing payout/EPS → Rank 3 (neutral).</p>
-      <p><strong>Ranking:</strong> Each raw value bucketed into quintiles (1–5). Lower-is-better factors ({", ".join(LOWER_IS_BETTER)}) inverted.</p>
-      <p><strong>Composite:</strong> Final Score = Σ Rank · Weight. Mean is mathematically guaranteed ≈ 3.0.</p>
-      <p><strong>Selection:</strong> Top {K['n_stocks']} by Final Score, equal-weight = 1/{K['n_stocks']} per name.</p>
-    </div>
-  </div>
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Overview Tab -->
+        <transition name="fade">
+        <div v-show="activeTab === 'overview'">
+            <div class="page-header">
+                <h1 class="page-title">Performance Overview</h1>
+                <div class="page-desc">{K['inception']} to {K['end']} • Capital: {K['init_val']} → {K['final_val']}</div>
+            </div>
+            
+            <div class="grid-cols-4" style="margin-bottom: 24px;">
+                <div class="card">
+                    <div class="card-title">CAGR</div>
+                    <div class="kpi-value text-success">{K['cagr']}</div>
+                    <div class="kpi-sub">Nifty 50: {K['nifty_cagr']}</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Max Drawdown</div>
+                    <div class="kpi-value text-danger">{K['maxdd']}</div>
+                    <div class="kpi-sub">Nifty 50: {K['nifty_dd']}</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Sharpe Ratio</div>
+                    <div class="kpi-value text-accent">{K['sharpe']}</div>
+                    <div class="kpi-sub">Sortino: {K['sortino']}</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Alpha</div>
+                    <div class="kpi-value text-success">{K['alpha']}</div>
+                    <div class="kpi-sub">Annualised Excess</div>
+                </div>
+            </div>
+            
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">
+                    <div class="card-title">Equity Curve vs Benchmark</div>
+                </div>
+                <div class="chart-container" style="height: 400px;">
+                    <canvas id="equityChart"></canvas>
+                </div>
+            </div>
+            
+            <div class="grid-cols-2">
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Drawdown Profile</div></div>
+                    <div class="chart-container"><canvas id="drawdownChart"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Rolling 12M Metrics</div></div>
+                    <div class="chart-container"><canvas id="rollingChart"></canvas></div>
+                </div>
+            </div>
+        </div>
+        </transition>
 
-  <div class="card" style="margin-top:16px">
-    <div class="section" style="margin-top:0">Known Limitations</div>
-    <div style="font-size:12px;line-height:1.7">
-      <p><span class="badge badge-warn">Survivorship</span> The NSE 200 ticker list is a snapshot. Stocks delisted or dropped from NSE 200 since 2020 are absent — backtest is biased toward winners. Truly historical NSE 200 constituent lists would be needed to fix this.</p>
-      <p><span class="badge badge-warn">Buyback drift</span> Market Cap uses current shares-outstanding. Splits/bonuses are corrected by yfinance auto-adjusted prices, but companies that did large buybacks/issuances since 2020 will have biased historical MCap.</p>
-      <p><span class="badge badge-info">Beta-as-high-rank</span> The model gives Rank 5 to high-beta stocks. This is a deliberate aggressive-tilt choice from the PDF spec. A "low-vol" anomaly model would invert this.</p>
-      <p><span class="badge badge-info">Sector mapping</span> Sector labels come from a static dictionary in <code>sectors.py</code>. Reclassifications by NSE or company restructurings are not tracked.</p>
+        <!-- Composition Tab -->
+        <transition name="fade">
+        <div v-show="activeTab === 'composition'">
+            <div class="page-header">
+                <h1 class="page-title">Portfolio Composition</h1>
+                <div class="page-desc">Current Holdings and Sector Exposures</div>
+            </div>
+            
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header"><div class="card-title">Current Top {K['n_stocks']} Holdings</div></div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Stock</th>
+                                <th>Sector</th>
+                                <th>Final Score</th>
+                                <th v-for="f in data.factors" :key="f">{{{{ f.substring(0,3) }}}}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(h, i) in data.heatmap" :key="i">
+                                <td style="font-weight: 600;">{{{{ h.ticker }}}}</td>
+                                <td style="color: var(--text-muted)">{{{{ h.sector }}}}</td>
+                                <td style="font-family: var(--font-mono)">{{{{ h.score.toFixed(3) }}}}</td>
+                                <td v-for="(rank, idx) in h.ranks" :key="idx">
+                                    <span :class="['rank-badge', 'r'+rank]">{{{{ rank }}}}</span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="card-header"><div class="card-title">Sector Exposure Over Time</div></div>
+                <div class="chart-container" style="height: 400px;"><canvas id="sectorChart"></canvas></div>
+            </div>
+        </div>
+        </transition>
+        
+        <!-- Factor Attribution Tab -->
+        <transition name="fade">
+        <div v-show="activeTab === 'factors'">
+            <div class="page-header">
+                <h1 class="page-title">Factor Attribution</h1>
+                <div class="page-desc">Isolated single-factor performance and Information Coefficients</div>
+            </div>
+            
+            <div class="grid-cols-2" style="margin-bottom: 24px;">
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Single Factor Returns (Base 100)</div></div>
+                    <div class="chart-container"><canvas id="sfChart"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Factor IC (Information Coefficient)</div></div>
+                    <div class="chart-container"><canvas id="icChart"></canvas></div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="card-header"><div class="card-title">Factor Performance Summary</div></div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr><th>Factor</th><th>Model Weight</th><th>CAGR</th><th>Max Drawdown</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="f in data.sf.summary" :key="f.factor">
+                                <td>{{{{ f.factor }}}}</td>
+                                <td>{{{{ (f.weight * 100).toFixed(0) }}}}%</td>
+                                <td class="text-success">{{{{ (f.cagr * 100).toFixed(2) }}}}%</td>
+                                <td class="text-danger">{{{{ (f.max_dd * 100).toFixed(2) }}}}%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        </transition>
+
+        <!-- Sandbox Tab -->
+        <transition name="fade">
+        <div v-show="activeTab === 'sandbox'">
+            <div class="page-header">
+                <h1 class="page-title">Model Sandbox</h1>
+                <div class="page-desc">Adjust factor weights and see hypothetical current portfolio</div>
+            </div>
+            
+            <div class="grid-cols-2">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Factor Weights (%)</div>
+                        <div style="font-size:12px; color:var(--text-muted)">Total: {{{{ sandboxTotalWeight }}}}%</div>
+                    </div>
+                    
+                    <div class="slider-group" v-for="f in data.factors" :key="f">
+                        <div class="slider-label">
+                            <span>{{{{ f }}}}</span>
+                            <span class="text-accent">{{{{ sandboxWeights[f] }}}}%</span>
+                        </div>
+                        <input type="range" min="0" max="100" v-model.number="sandboxWeights[f]" @input="recalculateSandbox">
+                    </div>
+                    
+                    <div style="margin-top: 24px; display:flex; gap: 12px;">
+                        <button class="btn" @click="normalizeWeights">Normalize to 100%</button>
+                        <button class="btn" style="background: transparent; border: 1px solid var(--border);" @click="resetWeights">Reset</button>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Hypothetical Top {K['n_stocks']}</div></div>
+                    <div class="table-container" style="max-height: 500px; overflow-y: auto;">
+                        <table>
+                            <thead>
+                                <tr><th>Rank</th><th>Stock</th><th>New Score</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(s, i) in sandboxResults" :key="s.ticker" :style="s.isNew ? 'background: rgba(16, 185, 129, 0.05)' : ''">
+                                    <td>{{{{ i + 1 }}}}</td>
+                                    <td>{{{{ s.ticker }}}} <span v-if="s.isNew" style="color:var(--success); font-size:10px; margin-left:8px;">★ NEW</span></td>
+                                    <td style="font-family: var(--font-mono)">{{{{ s.score.toFixed(3) }}}}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </transition>
+
+        <!-- Compare Tab -->
+        <transition name="fade">
+        <div v-show="activeTab === 'compare'">
+            <div class="page-header">
+                <h1 class="page-title">Stock Comparison</h1>
+                <div class="page-desc">Compare factor ranks and scores between any two stocks</div>
+            </div>
+            
+            <div class="grid-cols-2" style="margin-bottom: 24px;">
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Stock A</div></div>
+                    <select class="compare-select" v-model="compareA" @change="updateCompareChart">
+                        <option v-for="t in allTickers" :value="t" :key="'A'+t">{{{{ t }}}}</option>
+                    </select>
+                    
+                    <div v-if="compareA && data.stocks[compareA]" style="margin-top: 20px;">
+                        <div style="font-size: 20px; font-weight: 600;">{{{{ data.stocks[compareA].name }}}}</div>
+                        <div style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">{{{{ data.stocks[compareA].sector }}}}</div>
+                        <div class="kpi-value text-accent">{{{{ data.stocks[compareA].score_hist.values.slice(-1)[0] }}}}</div>
+                        <div class="kpi-sub">Current Final Score</div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Stock B</div></div>
+                    <select class="compare-select" v-model="compareB" @change="updateCompareChart">
+                        <option v-for="t in allTickers" :value="t" :key="'B'+t">{{{{ t }}}}</option>
+                    </select>
+                    
+                    <div v-if="compareB && data.stocks[compareB]" style="margin-top: 20px;">
+                        <div style="font-size: 20px; font-weight: 600;">{{{{ data.stocks[compareB].name }}}}</div>
+                        <div style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">{{{{ data.stocks[compareB].sector }}}}</div>
+                        <div class="kpi-value text-success">{{{{ data.stocks[compareB].score_hist.values.slice(-1)[0] }}}}</div>
+                        <div class="kpi-sub">Current Final Score</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card" v-show="compareA && compareB">
+                <div class="card-header"><div class="card-title">Current Factor Ranks Comparison</div></div>
+                <div class="chart-container" style="height: 400px; display:flex; justify-content:center;">
+                    <canvas id="compareRadarChart"></canvas>
+                </div>
+            </div>
+        </div>
+        </transition>
+
+        <!-- Diagnostics Tab -->
+        <transition name="fade">
+        <div v-show="activeTab === 'diagnostics'">
+            <div class="page-header">
+                <h1 class="page-title">Factor Diagnostics</h1>
+                <div class="page-desc">Information Coefficient · Quintile Spread · Cross-Factor Correlation — every number computed, none hardcoded.</div>
+            </div>
+
+            <div class="grid-cols-2" style="margin-bottom: 24px;">
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Mean Information Coefficient</div></div>
+                    <div class="chart-container"><canvas id="diagICChart"></canvas></div>
+                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
+                        Spearman rank-correlation between factor value at <em>t</em> and forward return (<em>t→t+1</em>).
+                        Sign-flipped for lower-is-better factors. ≥0.05 is decent; ≥0.10 is strong.
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Hit Rate · % of Periods Positive</div></div>
+                    <div class="chart-container"><canvas id="diagHitChart"></canvas></div>
+                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
+                        How consistently the factor was on the right side. 50% = coin flip.
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header"><div class="card-title">Quintile Spread (Q5 − Q1) · Mean Forward Return per Period</div></div>
+                <div class="chart-container"><canvas id="diagQSChart"></canvas></div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
+                    Equal-weighted top quintile return minus bottom quintile return, averaged across all rebalances.
+                    Larger spread = factor genuinely separates winners from losers.
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><div class="card-title">Cross-Factor Rank Correlation (Spearman, averaged)</div></div>
+                <div class="table-container" style="border:none;">
+                    <table style="font-family: var(--font-mono); font-size:12px;">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th v-for="g in data.corr.factors" :key="'corr-h-'+g" style="text-align:center;">{{{{ g.substring(0,3) }}}}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(row, i) in data.corr.matrix" :key="'corr-r-'+i">
+                                <td style="font-weight: 600;">{{{{ data.corr.factors[i] }}}}</td>
+                                <td v-for="(v, j) in row" :key="'corr-c-'+i+'-'+j"
+                                    :style="corrCellStyle(v, i, j)"
+                                    style="text-align:center;">
+                                    {{{{ v === null ? 'NaN' : (i === j ? '—' : v.toFixed(2)) }}}}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
+                    Negative entries = genuine diversification. Strong positive (&gt;0.3) means the two factors are picking
+                    overlapping stocks and one of them is partially redundant.
+                </div>
+            </div>
+        </div>
+        </transition>
+
+        <!-- Stock Drill-Down Tab -->
+        <transition name="fade">
+        <div v-show="activeTab === 'drilldown'">
+            <div class="page-header">
+                <h1 class="page-title">Stock Drill-Down</h1>
+                <div class="page-desc">Pick a ticker to see its price, score history, factor-rank trajectory, and in-portfolio timeline.</div>
+            </div>
+
+            <div class="card" style="margin-bottom: 24px; padding: 16px 24px;">
+                <div style="display:flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+                    <select class="compare-select" v-model="drillTicker" @change="renderDrill"
+                            style="max-width: 320px;">
+                        <option v-for="t in allTickers" :value="t" :key="'dd-'+t">{{{{ data.stocks[t] ? data.stocks[t].name : t }}}}</option>
+                    </select>
+                    <div v-if="drillTicker && data.stocks[drillTicker]" style="font-size: 13px; color: var(--text-muted);">
+                        <strong style="color: var(--text-main); font-size: 16px;">{{{{ data.stocks[drillTicker].name }}}}</strong>
+                        &nbsp;·&nbsp; {{{{ data.stocks[drillTicker].sector }}}}
+                        &nbsp;·&nbsp; latest score: <span style="color: var(--accent); font-family: var(--font-mono);">{{{{ drillLatestScore }}}}</span>
+                        &nbsp;·&nbsp; in-portfolio at: <span :style="{{color: drillInPortNow ? 'var(--success)' : 'var(--text-muted)'}}">{{{{ drillInPortNow ? 'YES' : 'no' }}}}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid-cols-2" style="margin-bottom: 24px;">
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Price · since inception</div></div>
+                    <div class="chart-container"><canvas id="drillPxChart"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Composite Final Score Over Time</div></div>
+                    <div class="chart-container"><canvas id="drillScoreChart"></canvas></div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header"><div class="card-title">Factor Rank Trajectory</div></div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th v-for="f in data.factors" :key="'drh-'+f" style="text-align:center;">{{{{ f.substring(0,3) }}}}</th>
+                                <th style="text-align:center;">Held</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(d, i) in drillRows" :key="'drr-'+i">
+                                <td style="font-family: var(--font-mono); color: var(--text-muted);">{{{{ d.date }}}}</td>
+                                <td v-for="f in data.factors" :key="'drv-'+i+'-'+f" style="text-align:center;">
+                                    <span v-if="d.ranks[f] !== null && d.ranks[f] !== undefined" :class="['rank-badge', 'r'+d.ranks[f]]">{{{{ d.ranks[f] }}}}</span>
+                                    <span v-else style="color: var(--text-muted);">—</span>
+                                </td>
+                                <td style="text-align:center;">
+                                    <i v-if="d.held" class="ri-check-line" style="color: var(--success);"></i>
+                                    <span v-else style="color: var(--text-muted);">·</span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        </transition>
+
+        <!-- Universe Tab -->
+        <transition name="fade">
+        <div v-show="activeTab === 'universe'">
+            <div class="page-header">
+                <h1 class="page-title">Universe</h1>
+                <div class="page-desc">Every ranked stock at the latest score date. Search by ticker / sector, filter to portfolio only, sort by any column.</div>
+            </div>
+
+            <div class="card" style="margin-bottom: 16px; padding: 16px 24px;">
+                <div style="display:flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                    <input class="compare-select" type="text" v-model="univSearch" placeholder="Search ticker or sector…" style="max-width: 280px;">
+                    <select class="compare-select" v-model="univSector" style="max-width: 240px;">
+                        <option value="">All sectors</option>
+                        <option v-for="s in univSectors" :value="s" :key="'us-'+s">{{{{ s }}}}</option>
+                    </select>
+                    <label style="font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
+                        <input type="checkbox" v-model="univPortOnly"> portfolio only
+                    </label>
+                    <span style="margin-left: auto; font-size: 12px; color: var(--text-muted);">
+                        {{{{ univFiltered.length }}}} of {{{{ data.universe.length }}}} stocks
+                    </span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="table-container" style="max-height: 65vh; overflow-y: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th @click="univSortBy('rank')" style="cursor: pointer;">#</th>
+                                <th @click="univSortBy('ticker')" style="cursor: pointer;">Stock</th>
+                                <th>Sector</th>
+                                <th @click="univSortBy('score')" style="cursor: pointer;">Score</th>
+                                <th v-for="f in data.factors" :key="'uh-'+f" style="text-align:center;">{{{{ f.substring(0,3) }}}}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="r in univFiltered" :key="r.full"
+                                :style="r.in_port ? 'background: rgba(16, 185, 129, 0.05)' : ''">
+                                <td style="color: var(--text-muted);">{{{{ r.rank }}}}</td>
+                                <td>
+                                    <span style="font-weight: 600; cursor: pointer;" @click="goToDrill(r.full)">{{{{ r.ticker }}}}</span>
+                                    <span v-if="r.in_port" class="rank-badge r5" style="margin-left:8px; font-size:9px; padding: 0 6px; width:auto; height:auto;">IN</span>
+                                </td>
+                                <td style="color: var(--text-muted); font-size: 12px;">{{{{ r.sector }}}}</td>
+                                <td style="font-family: var(--font-mono); font-weight: 600;">{{{{ r.score.toFixed(3) }}}}</td>
+                                <td v-for="(rk, idx) in r.ranks" :key="'urk-'+r.full+'-'+idx" style="text-align:center;">
+                                    <span :class="['rank-badge', 'r'+rk]">{{{{ rk }}}}</span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        </transition>
+
+        <!-- Logs Tab (enhanced) -->
+        <transition name="fade">
+        <div v-show="activeTab === 'logs'">
+            <div class="page-header">
+                <h1 class="page-title">Rebalance History</h1>
+                <div class="page-desc">Click any row to see the top winners and losers from that period. The chart shows turnover & cost over time.</div>
+            </div>
+
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header"><div class="card-title">Cost &amp; Turnover Trend</div></div>
+                <div class="chart-container" style="height: 280px;"><canvas id="logsCTChart"></canvas></div>
+            </div>
+
+            <div class="grid-cols-2">
+                <div class="card">
+                    <div class="card-header"><div class="card-title">Rebalance Log</div></div>
+                    <div class="table-container" style="max-height: 60vh; overflow-y: auto;">
+                        <table>
+                            <thead>
+                                <tr><th>Date</th><th>Univ</th><th>Port Ret</th><th>Nifty</th><th>Turn</th><th>Cost</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(r, i) in data.rebal" :key="'lg-'+i"
+                                    @click="logsSelected = i"
+                                    :style="logsSelected === i ? 'background: rgba(59, 130, 246, 0.08); cursor:pointer;' : 'cursor:pointer;'">
+                                    <td style="font-weight: 500;">{{{{ r.date }}}}</td>
+                                    <td>{{{{ r.univ }}}}</td>
+                                    <td :class="r.period_r >= 0 ? 'text-success' : 'text-danger'">{{{{ r.period_r >= 0 ? '+' : '' }}}}{{{{ r.period_r }}}}%</td>
+                                    <td :class="r.nifty_r >= 0 ? 'text-success' : 'text-danger'">{{{{ r.nifty_r >= 0 ? '+' : '' }}}}{{{{ r.nifty_r }}}}%</td>
+                                    <td>{{{{ r.turn }}}}%</td>
+                                    <td class="text-danger" style="font-family: var(--font-mono);">₹{{{{ r.cost.toLocaleString() }}}}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Period Detail</div>
+                        <div v-if="logsSelectedRow" style="font-size: 12px; color: var(--text-muted);">{{{{ logsSelectedRow.date }}}} · {{{{ logsSelectedRow.period_r >= 0 ? '+' : '' }}}}{{{{ logsSelectedRow.period_r }}}}% return</div>
+                    </div>
+                    <div v-if="logsSelectedRow">
+                        <div style="margin-bottom: 16px;">
+                            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px;">Top Winners</div>
+                            <table style="font-family: var(--font-mono); font-size: 12px;">
+                                <tr v-for="w in logsSelectedRow.winners" :key="'win-'+w[0]">
+                                    <td style="color: var(--text-main); font-weight: 500;">{{{{ w[0] }}}}</td>
+                                    <td class="text-success" style="text-align: right;">+{{{{ w[1] }}}}%</td>
+                                </tr>
+                                <tr v-if="!logsSelectedRow.winners.length"><td style="color:var(--text-muted)">—</td></tr>
+                            </table>
+                        </div>
+                        <div>
+                            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px;">Top Losers</div>
+                            <table style="font-family: var(--font-mono); font-size: 12px;">
+                                <tr v-for="l in logsSelectedRow.losers" :key="'los-'+l[0]">
+                                    <td style="color: var(--text-main); font-weight: 500;">{{{{ l[0] }}}}</td>
+                                    <td class="text-danger" style="text-align: right;">{{{{ l[1] }}}}%</td>
+                                </tr>
+                                <tr v-if="!logsSelectedRow.losers.length"><td style="color:var(--text-muted)">—</td></tr>
+                            </table>
+                        </div>
+                    </div>
+                    <div v-else style="color: var(--text-muted); font-size: 13px;">Click a row in the log to see winners and losers from that period.</div>
+                </div>
+            </div>
+        </div>
+        </transition>
+
+        <!-- Model Tab -->
+        <transition name="fade">
+        <div v-show="activeTab === 'model'">
+            <div class="page-header">
+                <h1 class="page-title">Model Reference</h1>
+                <div class="page-desc">What the 7 factors measure, how the pipeline runs, and the limitations to keep in mind.</div>
+            </div>
+
+            <div class="grid-cols-2" style="margin-bottom: 24px;">
+                <div class="card">
+                    <div class="card-header"><div class="card-title">The 7 Factors</div></div>
+                    <div v-for="(f, i) in data.factors" :key="'fact-'+f" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span style="font-weight: 600; color: var(--text-main);">{{{{ f }}}}</span>
+                            <span style="font-family: var(--font-mono); color: var(--accent); font-weight: 600;">{{{{ (data.weights[f]*100).toFixed(0) }}}}%</span>
+                        </div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">
+                            {{{{ factorDesc[f].metric }}}}
+                            <span v-if="data.lower_better.includes(f)" class="rank-badge r2" style="font-size: 9px; padding: 1px 6px; width:auto; height:auto; margin-left: 6px;">LOWER better</span>
+                        </div>
+                        <div style="font-size: 13px; color: var(--text-main); line-height: 1.6;">{{{{ factorDesc[f].desc }}}}</div>
+                    </div>
+                </div>
+                <div>
+                    <div class="card" style="margin-bottom: 16px;">
+                        <div class="card-header"><div class="card-title">Factor Weights</div></div>
+                        <div class="chart-container" style="height: 240px;"><canvas id="modelWeightsChart"></canvas></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header"><div class="card-title">Pipeline (data → score → portfolio)</div></div>
+                        <ol style="font-size: 13px; line-height: 2; color: var(--text-main); padding-left: 20px;">
+                            <li><code>screener_scraper.py</code> → <code>screener_raw.csv</code></li>
+                            <li><code>build_pit.py</code> → <code>fundamentals_pit.csv</code> (3-month institutional lag)</li>
+                            <li><code>universe_builder.py</code> → date-aware Nifty 200 constituents</li>
+                            <li><code>data_layer.py</code> · yfinance → <code>prices.csv</code> + <code>shares_outstanding.csv</code></li>
+                            <li><code>factor_engine.py</code> · 7 raw → quintile rank → composite</li>
+                            <li><code>backtester.py</code> · semi-annual rebalance + monthly equity walk</li>
+                            <li><code>analytics.py</code> · single-factor BTs, IC, attribution, sector tilt</li>
+                            <li><code>dashboard.py</code> · this page</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header"><div class="card-title">Methodology</div></div>
+                <div style="font-size: 13px; line-height: 1.8; color: var(--text-main);">
+                    <p><strong>Momentum:</strong> 0.4·Ret(T-4 → T-2) + 0.6·Ret(T-12 → T-5). T-1 is skipped to avoid short-term reversal.</p>
+                    <p><strong>Beta:</strong> 36-month rolling OLS slope vs Nifty 50, clipped to [0.1, 4.0].</p>
+                    <p><strong>Quality:</strong> Operating Profit / Total Assets, taken from the latest report visible at the rebal date with a 3-month institutional lag.</p>
+                    <p><strong>Value:</strong> Book-to-Market = Equity / Price (computed at the rebal date — Equity is PiT, Price is the rebal close).</p>
+                    <p><strong>Size:</strong> Market Cap = Price × shares-outstanding (yfinance current snapshot, split/bonus-corrected via auto_adjust prices). Falls back to Total Assets if shares unavailable.</p>
+                    <p><strong>Investment:</strong> YoY total-assets growth.</p>
+                    <p><strong>Yield:</strong> EPS × Dividend Payout %, ÷ Price. Missing payout/EPS → Rank 3 (neutral, never zero — that would punish data-incomplete names).</p>
+                    <p><strong>Universe gating (Phase 3):</strong> at each rebal date, a stock must (a) be in the Nifty 200 historical constituent list, (b) have ≥13 months of price history, (c) have ≥3 of 5 fundamental factors populated. Stocks failing (c) are dropped — previously they were silently propped up by Rank-3 NaN fills.</p>
+                    <p><strong>Ranking:</strong> Each raw value bucketed into quintiles 1–5. Lower-is-better factors (Size, Invest) inverted.</p>
+                    <p><strong>Composite:</strong> Final Score = Σ Rank · Weight. Mean is mathematically guaranteed ≈ 3.0. Top {K['n_stocks']} by Final Score, equal-weight.</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><div class="card-title">Known Limitations</div></div>
+                <div style="font-size: 13px; line-height: 1.8; color: var(--text-main);">
+                    <p><span class="rank-badge r2" style="font-size: 9px; padding: 1px 6px; width:auto; height:auto; margin-right: 6px;">DATA</span><strong>Buyback drift in MCap.</strong> Size uses <em>current</em> shares-outstanding. Splits/bonuses are corrected by yfinance auto-adjusted prices, but companies with major buybacks/issuances since 2020 will have biased historical Size ranks.</p>
+                    <p><span class="rank-badge r2" style="font-size: 9px; padding: 1px 6px; width:auto; height:auto; margin-right: 6px;">DATA</span><strong>Bank fundamentals.</strong> ~15 banks/financial-services entities (BANDHANBNK, SBICARD, SBILIFE, ICICIGI, etc.) fail the screener Balance-Sheet parser and are excluded from the eligible universe via the data-completeness gate.</p>
+                    <p><span class="rank-badge r3" style="font-size: 9px; padding: 1px 6px; width:auto; height:auto; margin-right: 6px;">UNIV</span><strong>Nifty 200 carry-forward.</strong> For Sep 2022 → Mar 2024 the NSE source ZIPs only contain Nifty 50 + Next 50 PDFs (no full Nifty 200 list). The universe builder carries forward the previous full list and merges in the available top-100 — approximate, but strictly better than capping at 50–100 names.</p>
+                    <p><span class="rank-badge r3" style="font-size: 9px; padding: 1px 6px; width:auto; height:auto; margin-right: 6px;">UNIV</span><strong>Forward-fill at inception.</strong> Feb 1 2020 inception predates the earliest reconstitution snapshot (Mar 31 2020). The backtester forward-fills the earliest snapshot for that one rebal — minor look-ahead, ~95% of constituents are stable across one quarter.</p>
+                    <p><span class="rank-badge r4" style="font-size: 9px; padding: 1px 6px; width:auto; height:auto; margin-right: 6px;">STYLE</span><strong>Beta-as-high-rank.</strong> The model gives Rank 5 to high-beta stocks per the PDF spec. A "low-vol anomaly" model would invert this. Style choice, not a bug.</p>
+                    <p><span class="rank-badge r3" style="font-size: 9px; padding: 1px 6px; width:auto; height:auto; margin-right: 6px;">UNIV</span><strong>Sector mapping is static.</strong> Labels come from <code>sectors.py</code>. NSE sector reclassifications and corporate restructurings are not tracked.</p>
+                </div>
+            </div>
+        </div>
+        </transition>
     </div>
-  </div>
 </div>
-
-</div><!-- /wrap -->
 
 <script>
-const D = {js};
-const F = D.factors, F_COLORS = {json.dumps(F_COLORS)};
-const RC = {{1:'#D85A30',2:'#EF9F27',3:'#4A5568',4:'rgba(29,158,117,.55)',5:'#1D9E75'}};
-const grid='rgba(255,255,255,0.06)', txt='rgba(232,234,240,0.55)';
-Chart.defaults.color = txt;
-Chart.defaults.borderColor = grid;
+const rawData = {js};
 
-// ─── Tab switching ────────────────────────────────────────────────────────
-function goTab(e, id) {{
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
-  e.target.classList.add('active');
-  document.getElementById(id).classList.add('active');
-  if (id==='t-overview' && !window._init.overview) initOverview();
-  if (id==='t-attr'     && !window._init.attr)     initAttribution();
-  if (id==='t-diag'     && !window._init.diag)     initDiagnostics();
-  if (id==='t-comp'     && !window._init.comp)     initComposition();
-  if (id==='t-rebal'    && !window._init.rebal)    initRebalance();
-  if (id==='t-univ'     && !window._init.univ)     initUniverse();
-  if (id==='t-stocks'   && !window._init.stocks)   initStocks();
-  if (id==='t-model'    && !window._init.model)    initModel();
-}}
-window._init = {{}};
+// Global chart defaults
+Chart.defaults.color = '#8F9EB2';
+Chart.defaults.font.family = "'Inter', sans-serif";
+Chart.defaults.scale.grid.color = 'rgba(255, 255, 255, 0.05)';
+Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(15, 17, 23, 0.9)';
+Chart.defaults.plugins.tooltip.padding = 12;
+Chart.defaults.plugins.tooltip.cornerRadius = 8;
+Chart.defaults.plugins.tooltip.borderColor = 'rgba(255, 255, 255, 0.1)';
+Chart.defaults.plugins.tooltip.borderWidth = 1;
 
-// ─── Overview ─────────────────────────────────────────────────────────────
-function initOverview() {{
-  window._init.overview = true;
+const app = Vue.createApp({{
+    data() {{
+        return {{
+            data: rawData,
+            activeTab: 'overview',
+            charts: {{}},
 
-  new Chart(document.getElementById('cEquity'), {{
-    type:'line', data:{{
-      labels: D.equity.labels,
-      datasets:[
-        {{label:'Portfolio', data:D.equity.port, borderColor:'#378ADD',
-          backgroundColor:'rgba(55,138,221,.1)', fill:true, tension:.25, pointRadius:0, borderWidth:2.5}},
-        {{label:'Nifty 50', data:D.equity.nifty, borderColor:'rgba(136,135,128,.7)',
-          borderDash:[5,4], fill:false, tension:.25, pointRadius:0, borderWidth:1.5}},
-      ]
+            // Sandbox state
+            sandboxWeights: {{}},
+            sandboxResults: [],
+            currentHoldings: new Set(),
+
+            // Compare state
+            allTickers: [],
+            compareA: '',
+            compareB: '',
+
+            // Drill-down state
+            drillTicker: '',
+
+            // Universe filter state
+            univSearch: '',
+            univSector: '',
+            univPortOnly: false,
+            univSortKey: 'rank',
+            univSortAsc: true,
+
+            // Logs state
+            logsSelected: 0,
+
+            // Static factor descriptions for the Model tab
+            factorDesc: {{
+                Momentum: {{ metric: 'Price persistence', desc: 'Compounded return T-12 → T-2 with T-1 skipped. Captures the well-documented 6–12 month price-trend anomaly.' }},
+                Quality:  {{ metric: 'Operating profit per ₹ of assets', desc: 'Operating Profit ÷ Total Assets. High-quality firms generate more profit from each rupee invested in their balance sheet.' }},
+                Value:    {{ metric: 'Cheapness', desc: 'Book Equity ÷ Market Price. The Fama-French value factor — buy what is cheap relative to fundamentals.' }},
+                Size:     {{ metric: 'Market capitalisation', desc: 'Smaller companies historically outperform on a risk-adjusted basis (size effect). Lower values rank higher.' }},
+                Beta:     {{ metric: 'Market sensitivity', desc: 'OLS slope of stock returns vs Nifty 50 returns over a rolling 36-month window. Higher = more aggressive.' }},
+                Invest:   {{ metric: 'Conservative investment', desc: 'YoY total-assets growth. The investment factor: firms that don\\'t over-invest tend to outperform. Lower values rank higher.' }},
+                Yield:    {{ metric: 'Cash returned to shareholders', desc: 'EPS × payout%, ÷ price. A "cash-flow discipline" filter on the high-momentum tilt.' }},
+            }},
+        }}
     }},
-    options:{{responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{display:false}},tooltip:{{mode:'index',intersect:false}}}},
-      scales:{{x:{{ticks:{{maxTicksLimit:14,font:{{size:10}}}},grid:{{display:false}}}},
-              y:{{grid:{{color:grid}},ticks:{{font:{{size:10}}}}}}}}
+    computed: {{
+        sandboxTotalWeight() {{
+            return Object.values(this.sandboxWeights).reduce((a,b) => a+b, 0);
+        }},
+
+        // Drill-down derived state
+        drillRows() {{
+            const s = this.data.stocks[this.drillTicker];
+            if (!s) return [];
+            const labels = s.score_hist.labels;
+            const ranks = s.ranks_hist.ranks || {{}};
+            const inP   = s.in_port || [];
+            return labels.map((d, i) => {{
+                const r = {{}};
+                for (const f of this.data.factors) {{
+                    r[f] = ranks[f] ? ranks[f][i] : null;
+                }}
+                return {{ date: d, ranks: r, held: !!inP[i] }};
+            }});
+        }},
+        drillLatestScore() {{
+            const s = this.data.stocks[this.drillTicker];
+            if (!s) return '—';
+            const v = s.score_hist.values.slice(-1)[0];
+            return v === null || v === undefined ? '—' : v.toFixed(3);
+        }},
+        drillInPortNow() {{
+            const s = this.data.stocks[this.drillTicker];
+            if (!s || !s.in_port) return false;
+            return s.in_port.slice(-1)[0] === true;
+        }},
+
+        // Universe derived state
+        univSectors() {{
+            const set = new Set();
+            for (const r of this.data.universe) set.add(r.sector);
+            return Array.from(set).sort();
+        }},
+        univFiltered() {{
+            const q  = (this.univSearch || '').toLowerCase();
+            const sc = this.univSector;
+            const po = this.univPortOnly;
+            let rows = this.data.universe.filter(r => {{
+                if (po && !r.in_port) return false;
+                if (sc && r.sector !== sc) return false;
+                if (q && !(r.ticker.toLowerCase().includes(q) || (r.sector||'').toLowerCase().includes(q))) return false;
+                return true;
+            }});
+            const k = this.univSortKey, asc = this.univSortAsc;
+            rows.sort((a, b) => {{
+                const av = a[k], bv = b[k];
+                if (typeof av === 'string') return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+                return asc ? av - bv : bv - av;
+            }});
+            return rows;
+        }},
+
+        // Logs derived state
+        logsSelectedRow() {{
+            return this.data.rebal[this.logsSelected] || null;
+        }},
+    }},
+    mounted() {{
+        // Init sandbox
+        this.resetWeights();
+        this.currentHoldings = new Set(this.data.heatmap.map(h => h.full));
+
+        // Init compare + drilldown
+        this.allTickers = Object.keys(this.data.stocks).sort();
+        if (this.allTickers.length >= 2) {{
+            this.compareA = this.data.heatmap[0].full;
+            this.compareB = this.data.heatmap[1].full;
+            // Drill defaults to the highest-scored portfolio name
+            this.drillTicker = this.data.heatmap[0].full;
+        }}
+
+        // Logs default to the most recent rebalance
+        this.logsSelected = Math.max(0, (this.data.rebal || []).length - 1);
+
+        // Render charts slightly delayed to ensure DOM is ready
+        setTimeout(() => {{
+            this.renderCharts();
+            this.recalculateSandbox();
+            this.updateCompareChart();
+            this.renderDiagnostics();
+            this.renderDrill();
+            this.renderLogsCT();
+            this.renderModelWeights();
+        }}, 100);
+    }},
+    methods: {{
+        resetWeights() {{
+            for(let f of this.data.factors) {{
+                this.sandboxWeights[f] = Math.round(this.data.weights[f] * 100);
+            }}
+            this.recalculateSandbox();
+        }},
+        normalizeWeights() {{
+            let total = this.sandboxTotalWeight;
+            if(total === 0) return;
+            for(let f of this.data.factors) {{
+                this.sandboxWeights[f] = Math.round((this.sandboxWeights[f] / total) * 100);
+            }}
+            this.recalculateSandbox();
+        }},
+        recalculateSandbox() {{
+            let results = [];
+            // We use universe data which has the ranks for all stocks
+            for(let u of this.data.universe) {{
+                let score = 0;
+                for(let i=0; i<this.data.factors.length; i++) {{
+                    let f = this.data.factors[i];
+                    let rank = u.ranks[i];
+                    let w = this.sandboxWeights[f] / 100.0;
+                    // Lower is better logic is already baked into ranks! (Rank 5 is always best)
+                    score += rank * w;
+                }}
+                results.push({{
+                    ticker: u.ticker,
+                    full: u.full,
+                    score: score,
+                    isNew: !this.currentHoldings.has(u.full)
+                }});
+            }}
+            // Sort by score desc
+            results.sort((a,b) => b.score - a.score);
+            this.sandboxResults = results.slice(0, {K['n_stocks']});
+        }},
+        
+        renderCharts() {{
+            // 1. Equity Chart
+            this.charts.equity = new Chart(document.getElementById('equityChart'), {{
+                type: 'line',
+                data: {{
+                    labels: this.data.equity.labels,
+                    datasets: [
+                        {{ label: 'Portfolio', data: this.data.equity.port, borderColor: '#3B82F6', borderWidth: 2, tension: 0.1, pointRadius: 0 }},
+                        {{ label: 'Nifty 50', data: this.data.equity.nifty, borderColor: '#8F9EB2', borderWidth: 1, borderDash: [5,5], tension: 0.1, pointRadius: 0 }}
+                    ]
+                }},
+                options: {{ responsive: true, maintainAspectRatio: false, interaction: {{ mode: 'index', intersect: false }} }}
+            }});
+            
+            // 2. Drawdown Chart
+            this.charts.dd = new Chart(document.getElementById('drawdownChart'), {{
+                type: 'line',
+                data: {{
+                    labels: this.data.drawdown.labels,
+                    datasets: [
+                        {{ label: 'Portfolio DD', data: this.data.drawdown.port, borderColor: '#EF4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', fill: true, borderWidth: 1, pointRadius: 0 }}
+                    ]
+                }},
+                options: {{ responsive: true, maintainAspectRatio: false }}
+            }});
+            
+            // 3. Rolling Metrics
+            this.charts.rolling = new Chart(document.getElementById('rollingChart'), {{
+                type: 'line',
+                data: {{
+                    labels: this.data.rolling.labels,
+                    datasets: [
+                        {{ label: 'Sharpe', data: this.data.rolling.sharpe, borderColor: '#10B981', borderWidth: 1, pointRadius: 0 }},
+                        {{ label: 'Alpha', data: this.data.rolling.alpha, borderColor: '#F59E0B', borderWidth: 1, pointRadius: 0 }}
+                    ]
+                }},
+                options: {{ responsive: true, maintainAspectRatio: false }}
+            }});
+            
+            // 4. Sector Exposure
+            let sectorDatasets = this.data.sector_exp.sectors.map((sec, i) => ({{
+                label: sec,
+                data: this.data.sector_exp.matrix[i],
+                fill: true,
+                borderWidth: 0,
+                // Assign distinct colors using HSL
+                backgroundColor: `hsla(${{i * (360 / this.data.sector_exp.sectors.length)}}, 70%, 50%, 0.7)`
+            }}));
+            
+            this.charts.sector = new Chart(document.getElementById('sectorChart'), {{
+                type: 'line',
+                data: {{
+                    labels: this.data.sector_exp.labels,
+                    datasets: sectorDatasets
+                }},
+                options: {{ responsive: true, maintainAspectRatio: false, scales: {{ y: {{ stacked: true, max: 100 }} }}, elements: {{ point: {{ radius: 0 }} }} }}
+            }});
+            
+            // 5. Single Factor Curves
+            let sfDatasets = this.data.factors.map((f, i) => ({{
+                label: f,
+                data: this.data.sf.series[f],
+                borderWidth: 1.5,
+                borderColor: `hsla(${{i * (360 / this.data.factors.length)}}, 70%, 60%, 1)`,
+                pointRadius: 0,
+                tension: 0.1
+            }}));
+            sfDatasets.push({{
+                label: 'MultiFactor',
+                data: this.data.sf.series['MultiFactor'],
+                borderWidth: 3,
+                borderColor: '#E2E8F0',
+                pointRadius: 0,
+                tension: 0.1
+            }});
+            
+            this.charts.sf = new Chart(document.getElementById('sfChart'), {{
+                type: 'line',
+                data: {{ labels: this.data.sf.labels, datasets: sfDatasets }},
+                options: {{ responsive: true, maintainAspectRatio: false, interaction: {{ mode: 'index', intersect: false }} }}
+            }});
+            
+            // 6. IC Chart
+            this.charts.ic = new Chart(document.getElementById('icChart'), {{
+                type: 'bar',
+                data: {{
+                    labels: this.data.ic.factors,
+                    datasets: [{{ label: 'Mean IC', data: this.data.ic.mean_ic, backgroundColor: '#3B82F6', borderRadius: 4 }}]
+                }},
+                options: {{ responsive: true, maintainAspectRatio: false }}
+            }});
+        }},
+        
+        updateCompareChart() {{
+            if(!this.compareA || !this.compareB) return;
+            
+            // Get latest ranks
+            let ranksA = [], ranksB = [];
+            
+            for(let f of this.data.factors) {{
+                let rhA = this.data.stocks[this.compareA].ranks_hist.ranks[f];
+                let rhB = this.data.stocks[this.compareB].ranks_hist.ranks[f];
+                ranksA.push(rhA ? rhA[rhA.length-1] : 3);
+                ranksB.push(rhB ? rhB[rhB.length-1] : 3);
+            }}
+            
+            if(this.charts.compare) this.charts.compare.destroy();
+            
+            this.charts.compare = new Chart(document.getElementById('compareRadarChart'), {{
+                type: 'radar',
+                data: {{
+                    labels: this.data.factors,
+                    datasets: [
+                        {{
+                            label: this.data.stocks[this.compareA].name,
+                            data: ranksA,
+                            backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                            borderColor: '#3B82F6',
+                            pointBackgroundColor: '#3B82F6',
+                        }},
+                        {{
+                            label: this.data.stocks[this.compareB].name,
+                            data: ranksB,
+                            backgroundColor: 'rgba(16, 185, 129, 0.2)',
+                            borderColor: '#10B981',
+                            pointBackgroundColor: '#10B981',
+                        }}
+                    ]
+                }},
+                options: {{
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {{ r: {{ min: 0, max: 5, ticks: {{ stepSize: 1 }} }} }}
+                }}
+            }});
+        }},
+
+        // ── Diagnostics ───────────────────────────────────────────────────
+        corrCellStyle(v, i, j) {{
+            if (v === null || v === undefined || i === j) {{
+                return 'padding:8px 4px; color: var(--text-muted);';
+            }}
+            const a = Math.min(Math.abs(v), 0.7);
+            let bg = 'transparent';
+            if (v < -0.1)      bg = `rgba(239, 68, 68, ${{a}})`;
+            else if (v >  0.1) bg = `rgba(59, 130, 246, ${{a}})`;
+            const c = Math.abs(v) > 0.25 ? 'white' : 'var(--text-main)';
+            return `padding:8px 4px; background:${{bg}}; color:${{c}}; border-radius:4px;`;
+        }},
+        renderDiagnostics() {{
+            // IC bar (separate from the small IC chart on the Factors tab)
+            this.charts.diagIC = new Chart(document.getElementById('diagICChart'), {{
+                type: 'bar',
+                data: {{
+                    labels: this.data.ic.factors,
+                    datasets: [{{
+                        label: 'Mean IC',
+                        data: this.data.ic.mean_ic,
+                        backgroundColor: this.data.ic.mean_ic.map(v => (v ?? 0) >= 0 ? '#10B981' : '#EF4444'),
+                        borderRadius: 4
+                    }}]
+                }},
+                options: {{
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {{ legend: {{ display: false }},
+                        tooltip: {{ callbacks: {{ label: c => `IC: ${{(c.raw ?? 0).toFixed(3)}}` }} }} }},
+                    scales: {{ y: {{ ticks: {{ callback: v => v.toFixed(2) }} }} }}
+                }}
+            }});
+
+            // Hit rate bar
+            this.charts.diagHit = new Chart(document.getElementById('diagHitChart'), {{
+                type: 'bar',
+                data: {{
+                    labels: this.data.ic.factors,
+                    datasets: [{{
+                        label: 'Hit %',
+                        data: this.data.ic.hit_rate.map(v => (v ?? 0) * 100),
+                        backgroundColor: this.data.ic.hit_rate.map(v => (v ?? 0) >= 0.5 ? '#10B981' : '#EF4444'),
+                        borderRadius: 4
+                    }}]
+                }},
+                options: {{
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {{ legend: {{ display: false }},
+                        tooltip: {{ callbacks: {{ label: c => `${{c.raw.toFixed(0)}}% positive` }} }} }},
+                    scales: {{ y: {{ min: 0, max: 100, ticks: {{ callback: v => v + '%' }} }} }}
+                }}
+            }});
+
+            // Quintile spread bar (in %)
+            this.charts.diagQS = new Chart(document.getElementById('diagQSChart'), {{
+                type: 'bar',
+                data: {{
+                    labels: this.data.qs.factors,
+                    datasets: [{{
+                        label: 'Q5 − Q1',
+                        data: this.data.qs.mean_spread.map(v => v === null ? null : v * 100),
+                        backgroundColor: this.data.qs.mean_spread.map(v => (v ?? 0) >= 0 ? '#10B981' : '#EF4444'),
+                        borderRadius: 4
+                    }}]
+                }},
+                options: {{
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {{ legend: {{ display: false }},
+                        tooltip: {{ callbacks: {{ label: c => `${{(c.raw ?? 0).toFixed(2)}}% per period` }} }} }},
+                    scales: {{ y: {{ ticks: {{ callback: v => v.toFixed(1) + '%' }} }} }}
+                }}
+            }});
+        }},
+
+        // ── Stock Drill-Down ──────────────────────────────────────────────
+        renderDrill() {{
+            const s = this.data.stocks[this.drillTicker];
+            if (!s) return;
+            if (this.charts.drillPx)    this.charts.drillPx.destroy();
+            if (this.charts.drillScore) this.charts.drillScore.destroy();
+
+            this.charts.drillPx = new Chart(document.getElementById('drillPxChart'), {{
+                type: 'line',
+                data: {{
+                    labels: s.price.labels,
+                    datasets: [{{
+                        label: 'Price',
+                        data: s.price.values,
+                        borderColor: '#3B82F6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        fill: true, tension: 0.25, borderWidth: 1.8, pointRadius: 0,
+                    }}]
+                }},
+                options: {{
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {{ legend: {{ display: false }},
+                        tooltip: {{ callbacks: {{ label: c => '₹' + (c.raw ?? 0).toFixed(2) }} }} }}
+                }}
+            }});
+
+            this.charts.drillScore = new Chart(document.getElementById('drillScoreChart'), {{
+                type: 'line',
+                data: {{
+                    labels: s.score_hist.labels,
+                    datasets: [{{
+                        label: 'Final Score',
+                        data: s.score_hist.values,
+                        borderColor: '#10B981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                        fill: true, tension: 0.25, borderWidth: 1.8, pointRadius: 3,
+                    }}]
+                }},
+                options: {{
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {{ legend: {{ display: false }},
+                        tooltip: {{ callbacks: {{ label: c => 'Score: ' + (c.raw ?? 0).toFixed(3) }} }} }},
+                    scales: {{ y: {{ min: 1, max: 5 }} }}
+                }}
+            }});
+        }},
+        goToDrill(full) {{
+            this.drillTicker = full;
+            this.activeTab = 'drilldown';
+            this.$nextTick(() => this.renderDrill());
+        }},
+
+        // ── Universe ──────────────────────────────────────────────────────
+        univSortBy(k) {{
+            if (this.univSortKey === k) {{
+                this.univSortAsc = !this.univSortAsc;
+            }} else {{
+                this.univSortKey = k;
+                this.univSortAsc = (k === 'rank');
+            }}
+        }},
+
+        // ── Logs cost/turnover trend ──────────────────────────────────────
+        renderLogsCT() {{
+            const labels = this.data.rebal.map(r => r.date);
+            const turn   = this.data.rebal.map(r => r.turn);
+            const cost   = this.data.rebal.map(r => r.cost);
+            this.charts.logsCT = new Chart(document.getElementById('logsCTChart'), {{
+                type: 'line',
+                data: {{
+                    labels: labels,
+                    datasets: [
+                        {{ label: 'Turnover (%)', data: turn, borderColor: '#F59E0B',
+                            yAxisID: 'y',  borderWidth: 1.8, pointRadius: 3, tension: 0.25 }},
+                        {{ label: 'Cost (₹)',      data: cost, borderColor: '#EF4444',
+                            yAxisID: 'y2', borderWidth: 1.8, pointRadius: 3, tension: 0.25 }},
+                    ]
+                }},
+                options: {{
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: {{ mode: 'index', intersect: false }},
+                    scales: {{
+                        y:  {{ position: 'left',  ticks: {{ callback: v => v + '%' }} }},
+                        y2: {{ position: 'right', grid: {{ display: false }},
+                              ticks: {{ callback: v => '₹' + (v/1000).toFixed(0) + 'k' }} }}
+                    }}
+                }}
+            }});
+        }},
+
+        // ── Model · weights donut ─────────────────────────────────────────
+        renderModelWeights() {{
+            const F = this.data.factors;
+            const colors = F.map((_, i) => `hsla(${{i * (360 / F.length)}}, 70%, 60%, 1)`);
+            this.charts.modelW = new Chart(document.getElementById('modelWeightsChart'), {{
+                type: 'doughnut',
+                data: {{
+                    labels: F,
+                    datasets: [{{ data: F.map(f => this.data.weights[f] * 100),
+                                  backgroundColor: colors, borderWidth: 0 }}]
+                }},
+                options: {{
+                    responsive: true, maintainAspectRatio: false, cutout: '55%',
+                    plugins: {{
+                        legend: {{ position: 'right', labels: {{ font: {{ size: 11 }}, boxWidth: 10 }} }},
+                        tooltip: {{ callbacks: {{ label: c => `${{c.label}}: ${{c.raw}}%` }} }}
+                    }}
+                }}
+            }});
+        }}
     }}
-  }});
-
-  new Chart(document.getElementById('cDD'), {{
-    type:'line', data:{{
-      labels:D.drawdown.labels,
-      datasets:[
-        {{label:'Portfolio',data:D.drawdown.port,borderColor:'#D85A30',
-          backgroundColor:'rgba(216,90,48,.18)',fill:true,tension:0,pointRadius:0,borderWidth:1.5}},
-        {{label:'Nifty 50',data:D.drawdown.nifty,borderColor:'rgba(136,135,128,.6)',
-          borderDash:[3,3],fill:false,tension:0,pointRadius:0,borderWidth:1}},
-      ]
-    }},
-    options:{{responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{display:false}},tooltip:{{callbacks:{{label:c=>`${{c.dataset.label}}: ${{c.raw?.toFixed(1)}}%`}}}}}},
-      scales:{{x:{{ticks:{{maxTicksLimit:12,font:{{size:9}}}},grid:{{display:false}}}},
-              y:{{max:0,ticks:{{font:{{size:9}},callback:v=>v+'%'}},grid:{{color:grid}}}}}}}}
-  }});
-
-  new Chart(document.getElementById('cAnnual'), {{
-    type:'bar', data:{{labels:D.annual.labels,datasets:[
-      {{label:'Portfolio',data:D.annual.port,backgroundColor:'#378ADD',borderRadius:3}},
-      {{label:'Nifty 50',data:D.annual.nifty,backgroundColor:'rgba(136,135,128,.4)',borderRadius:3}}
-    ]}},
-    options:{{responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{labels:{{font:{{size:11}},boxWidth:10}}}},
-        tooltip:{{callbacks:{{label:c=>`${{c.dataset.label}}: ${{c.raw>0?'+':''}}${{c.raw}}%`}}}}}},
-      scales:{{x:{{grid:{{display:false}}}},y:{{grid:{{color:grid}},ticks:{{callback:v=>v+'%',font:{{size:10}}}}}}}}}}
-  }});
-
-  new Chart(document.getElementById('cRolling'), {{
-    type:'line', data:{{labels:D.rolling.labels,datasets:[
-      {{label:'Sharpe',data:D.rolling.sharpe,borderColor:'#1D9E75',fill:false,tension:.25,pointRadius:0,borderWidth:1.8,yAxisID:'y'}},
-      {{label:'Alpha', data:D.rolling.alpha,borderColor:'#EF9F27',fill:false,tension:.25,pointRadius:0,borderWidth:1.5,yAxisID:'y2'}},
-      {{label:'Beta',  data:D.rolling.beta, borderColor:'#D4537E',fill:false,tension:.25,pointRadius:0,borderWidth:1.5,yAxisID:'y3'}},
-    ]}},
-    options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:'index',intersect:false}},
-      plugins:{{legend:{{display:false}}}},
-      scales:{{
-        x:{{ticks:{{maxTicksLimit:12,font:{{size:9}}}},grid:{{display:false}}}},
-        y:{{position:'left',grid:{{color:grid}},ticks:{{font:{{size:9}}}}, title:{{display:true,text:'Sharpe',font:{{size:10}}}}}},
-        y2:{{position:'right',grid:{{display:false}},ticks:{{font:{{size:9}},callback:v=>(v*100).toFixed(0)+'%'}}, title:{{display:true,text:'Alpha',font:{{size:10}}}}}},
-        y3:{{position:'right',grid:{{display:false}},ticks:{{font:{{size:9}}}}, offset:true, title:{{display:true,text:'Beta',font:{{size:10}}}}}}
-      }}}}
-  }});
-}}
-
-// ─── Attribution ──────────────────────────────────────────────────────────
-function initAttribution() {{
-  window._init.attr = true;
-  const colors = {{}};
-  F.forEach((f,i) => colors[f] = F_COLORS[i]);
-  colors['MultiFactor'] = '#FFFFFF';
-  const datasets = [];
-  Object.entries(D.sf.series).forEach(([f,vals]) => {{
-    datasets.push({{
-      label:f, data:vals,
-      borderColor: f==='MultiFactor' ? '#FFFFFF' : colors[f],
-      borderWidth: f==='MultiFactor' ? 2.5 : 1.4,
-      borderDash:  f==='MultiFactor' ? [] : [],
-      fill:false, tension:.2, pointRadius:0
-    }});
-  }});
-  new Chart(document.getElementById('cSF'), {{
-    type:'line', data:{{labels:D.sf.labels,datasets}},
-    options:{{responsive:true,maintainAspectRatio:false,
-      interaction:{{mode:'index',intersect:false}},
-      plugins:{{legend:{{display:false}},
-        tooltip:{{callbacks:{{label:c=>`${{c.dataset.label}}: ${{c.raw?.toFixed(1)}}`}}}}}},
-      scales:{{x:{{ticks:{{maxTicksLimit:14,font:{{size:9}}}},grid:{{display:false}}}},
-              y:{{grid:{{color:grid}},ticks:{{font:{{size:9}}}}}}}}}}
-  }});
-
-  // Custom legend
-  const lg = document.getElementById('sfLegend');
-  Object.keys(D.sf.series).forEach(f => {{
-    const c = f==='MultiFactor'?'#FFFFFF':colors[f];
-    lg.innerHTML += `<span><span class="legend-dot" style="background:${{c}}"></span>${{f}}</span>`;
-  }});
-
-  // Per-factor table
-  const tb = document.getElementById('sfTable');
-  D.sf.summary.sort((a,b) => b.cagr - a.cagr).forEach(r => {{
-    const cls = (r.cagr>=0)?'pos':'neg';
-    tb.innerHTML += `<tr>
-      <td style="font-weight:600">${{r.factor}}</td>
-      <td class="mono">${{(r.weight*100).toFixed(0)}}%</td>
-      <td class="mono ${{cls}}">${{(r.cagr*100).toFixed(1)}}%</td>
-      <td class="mono ${{cls}}">${{(r.total_return*100).toFixed(1)}}%</td>
-      <td class="mono neg">${{(r.max_dd*100).toFixed(1)}}%</td>
-    </tr>`;
-  }});
-
-  // Regime table
-  const r = D.regime;
-  if (!r.years.length) {{
-    document.getElementById('regimeTable').innerHTML = '<div style="color:var(--sub);font-size:11px">No regime data (need ≥2 rebalances per year).</div>';
-  }} else {{
-    let h = '<table class="tbl" style="font-size:11px"><thead><tr><th>Year</th>';
-    r.factors.forEach(f => h += `<th>${{f}}</th>`);
-    h += '</tr></thead><tbody>';
-    r.matrix.forEach((row,i) => {{
-      h += `<tr><td class="mono" style="font-weight:600">${{r.years[i]}}</td>`;
-      row.forEach(v => {{
-        const bg = v===null ? 'transparent'
-                 : v >  3 ? `rgba(29,158,117,${{Math.min(Math.abs(v)/30, .6)}})`
-                 : v < -3 ? `rgba(216,90,48,${{Math.min(Math.abs(v)/30, .6)}})`
-                 : 'transparent';
-        const txt = v===null ? '—' : (v>0?'+':'')+v.toFixed(1);
-        h += `<td class="mono" style="text-align:center;background:${{bg}};border-radius:3px">${{txt}}</td>`;
-      }});
-      h += '</tr>';
-    }});
-    h += '</tbody></table>';
-    document.getElementById('regimeTable').innerHTML = h;
-  }}
-}}
-
-// ─── Diagnostics ──────────────────────────────────────────────────────────
-function initDiagnostics() {{
-  window._init.diag = true;
-
-  new Chart(document.getElementById('cIC'), {{
-    type:'bar', data:{{labels:D.ic.factors,datasets:[
-      {{label:'Mean IC',data:D.ic.mean_ic,
-        backgroundColor: D.ic.mean_ic.map(v => v>=0?'#1D9E75':'#D85A30'),
-        borderRadius:3}},
-    ]}},
-    options:{{responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{display:false}},
-        tooltip:{{callbacks:{{label:c=>`IC: ${{c.raw?.toFixed(3)}}`}}}}}},
-      scales:{{x:{{grid:{{display:false}}}},y:{{grid:{{color:grid}},ticks:{{callback:v=>v.toFixed(2)}}}}}}}}
-  }});
-
-  new Chart(document.getElementById('cHit'), {{
-    type:'bar', data:{{labels:D.ic.factors,datasets:[
-      {{label:'Hit Rate',data:D.ic.hit_rate.map(v=>v*100),
-        backgroundColor: D.ic.hit_rate.map(v => v>=0.5?'#1D9E75':'#D85A30'),
-        borderRadius:3}},
-    ]}},
-    options:{{responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{display:false}},
-        tooltip:{{callbacks:{{label:c=>`${{c.raw.toFixed(0)}}% of periods positive`}}}}}},
-      scales:{{x:{{grid:{{display:false}}}},
-              y:{{min:0,max:100,grid:{{color:grid}},ticks:{{callback:v=>v+'%'}}}}}}}}
-  }});
-
-  new Chart(document.getElementById('cQS'), {{
-    type:'bar', data:{{labels:D.qs.factors,datasets:[
-      {{label:'Q5−Q1 spread',data:D.qs.mean_spread.map(v=>v===null?null:v*100),
-        backgroundColor: D.qs.mean_spread.map(v => (v??0)>=0?'#1D9E75':'#D85A30'),
-        borderRadius:3}}
-    ]}},
-    options:{{responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{display:false}},
-        tooltip:{{callbacks:{{label:c=>`${{c.raw?.toFixed(2)}}% per period`}}}}}},
-      scales:{{x:{{grid:{{display:false}}}},
-              y:{{grid:{{color:grid}},ticks:{{callback:v=>v.toFixed(1)+'%'}}}}}}}}
-  }});
-
-  // Correlation matrix
-  const c = D.corr;
-  let h = '<table class="tbl" style="font-size:11px"><thead><tr><th></th>';
-  c.factors.forEach(f => h += `<th style="text-align:center">${{f.slice(0,3)}}</th>`);
-  h += '</tr></thead><tbody>';
-  c.matrix.forEach((row,i) => {{
-    h += `<tr><td class="mono" style="font-weight:600">${{c.factors[i]}}</td>`;
-    row.forEach((v,j) => {{
-      let bg='transparent', col='var(--text)';
-      if (v!==null && i!==j) {{
-        if (v < -0.1) {{ bg = `rgba(216,90,48,${{Math.min(Math.abs(v),.7)}})`; col='white'; }}
-        else if (v > 0.1) {{ bg = `rgba(55,138,221,${{Math.min(v*1.5,.7)}})`; col='white'; }}
-      }}
-      const txt = v===null ? 'NaN' : (i===j ? '—' : v.toFixed(2));
-      h += `<td class="mono" style="text-align:center;background:${{bg}};color:${{col}};border-radius:3px">${{txt}}</td>`;
-    }});
-    h += '</tr>';
-  }});
-  h += '</tbody></table>';
-  document.getElementById('corrTable').innerHTML = h;
-}}
-
-// ─── Composition ──────────────────────────────────────────────────────────
-function initComposition() {{
-  window._init.comp = true;
-
-  // Heatmap
-  const tb = document.getElementById('heatBody');
-  D.heatmap.forEach((s,i) => {{
-    const bar = ((s.score - 1) / 4 * 100).toFixed(1);
-    let row = `<tr>
-      <td style="color:var(--sub)">${{i+1}}</td>
-      <td style="font-weight:600">${{s.ticker}}</td>
-      <td><span class="badge badge-sec">${{s.sector}}</span></td>
-      <td class="mono" style="font-weight:700">${{s.score.toFixed(3)}}</td>`;
-    s.ranks.forEach(r => row += `<td><span class="pip r${{r}}">${{r}}</span></td>`);
-    row += `<td><div class="prog-bar" style="width:90px"><div class="prog-fill" style="width:${{bar}}%;background:#378ADD"></div></div></td></tr>`;
-    tb.innerHTML += row;
-  }});
-
-  // Sector area
-  const se = D.sector_exp;
-  const datasets = se.sectors.map((s,i) => ({{
-    label:s, data:se.matrix[i],
-    backgroundColor: F_COLORS[i % F_COLORS.length],
-    borderColor: 'transparent',
-    fill:true, tension:0, pointRadius:0,
-  }}));
-  new Chart(document.getElementById('cSector'), {{
-    type:'line', data:{{labels:se.labels,datasets}},
-    options:{{responsive:true,maintainAspectRatio:false,
-      interaction:{{mode:'index',intersect:false}},
-      plugins:{{legend:{{labels:{{font:{{size:9}},boxWidth:8,padding:4}},position:'right'}},
-        tooltip:{{callbacks:{{label:c=>`${{c.dataset.label}}: ${{c.raw?.toFixed(1)}}%`}}}}}},
-      scales:{{x:{{ticks:{{font:{{size:9}}}},grid:{{display:false}}}},
-              y:{{stacked:true,max:100,grid:{{color:grid}},ticks:{{callback:v=>v+'%',font:{{size:9}}}}}}}}}}
-  }});
-
-  // Transitions
-  const tr = document.getElementById('transBody');
-  D.transitions.forEach(t => {{
-    const inHtml  = t.in.length  ? t.in.slice(0, 12).map(x=>`<span class="badge badge-in" style="margin:1px">${{x}}</span>`).join('')   + (t.in.length>12?` <span style="color:var(--sub)">+${{t.in.length-12}}</span>`:'') : '<span style="color:var(--sub)">—</span>';
-    const outHtml = t.out.length ? t.out.slice(0, 12).map(x=>`<span class="badge badge-warn" style="margin:1px">${{x}}</span>`).join('') + (t.out.length>12?` <span style="color:var(--sub)">+${{t.out.length-12}}</span>`:'') : '<span style="color:var(--sub)">—</span>';
-    tr.innerHTML += `<tr>
-      <td class="mono" style="color:var(--sub)">${{t.date}}</td>
-      <td>${{t.size}}</td>
-      <td>${{inHtml}}</td>
-      <td>${{outHtml}}</td>
-    </tr>`;
-  }});
-}}
-
-// ─── Rebalance ────────────────────────────────────────────────────────────
-function initRebalance() {{
-  window._init.rebal = true;
-  const tb = document.getElementById('rebalBody');
-  D.rebal.forEach((r,i) => {{
-    const a = (r.period_r - r.nifty_r);
-    tb.innerHTML += `<tr onclick="showRebalDetail(${{i}})" style="cursor:pointer">
-      <td class="mono" style="color:var(--sub)">${{r.date}}</td>
-      <td class="mono">₹${{r.value.toLocaleString('en-IN')}}</td>
-      <td class="mono ${{r.period_r>=0?'pos':'neg'}}">${{r.period_r>=0?'+':''}}${{r.period_r}}%</td>
-      <td class="mono ${{r.nifty_r>=0?'pos':'neg'}}">${{r.nifty_r>=0?'+':''}}${{r.nifty_r}}%</td>
-      <td class="mono ${{a>=0?'pos':'neg'}}">${{a>=0?'+':''}}${{a.toFixed(1)}}%</td>
-      <td class="mono">${{r.turn}}%</td>
-      <td class="pos">+${{r.n_in}}</td>
-      <td class="neg">-${{r.n_out}}</td>
-      <td class="mono" style="color:var(--sub)">₹${{r.cost.toLocaleString('en-IN')}}</td>
-    </tr>`;
-  }});
-
-  new Chart(document.getElementById('cCT'), {{
-    type:'line', data:{{labels:D.ct.labels,datasets:[
-      {{label:'Turnover (%)',data:D.ct.turnover,borderColor:'#EF9F27',
-        fill:false,tension:.25,pointRadius:3,borderWidth:1.8,yAxisID:'y'}},
-      {{label:'Cost (₹)',data:D.ct.cost,borderColor:'#D85A30',
-        fill:false,tension:.25,pointRadius:3,borderWidth:1.8,yAxisID:'y2'}},
-    ]}},
-    options:{{responsive:true,maintainAspectRatio:false,
-      interaction:{{mode:'index',intersect:false}},
-      plugins:{{legend:{{labels:{{font:{{size:11}},boxWidth:10}}}}}},
-      scales:{{x:{{grid:{{display:false}},ticks:{{font:{{size:9}}}}}},
-              y:{{position:'left',grid:{{color:grid}},ticks:{{callback:v=>v+'%',font:{{size:9}}}}}},
-              y2:{{position:'right',grid:{{display:false}},ticks:{{callback:v=>'₹'+(v/1000).toFixed(0)+'k',font:{{size:9}}}}}}}}}}
-  }});
-}}
-
-function showRebalDetail(i) {{
-  const r = D.rebal[i];
-  const winners = r.winners.map(([t,v]) => `<tr><td>${{t}}</td><td class="mono pos">+${{v}}%</td></tr>`).join('');
-  const losers  = r.losers.map(([t,v])  => `<tr><td>${{t}}</td><td class="mono neg">${{v}}%</td></tr>`).join('');
-  document.getElementById('rebalDetail').innerHTML = `
-    <div class="section" style="margin-top:0">${{r.date}} · period return ${{r.period_r}}%</div>
-    <div style="font-size:12px;color:var(--sub);margin-bottom:10px">
-      Universe ${{r.univ}}  ·  Turnover ${{r.turn}}%  ·  Cost ₹${{r.cost.toLocaleString('en-IN')}}
-    </div>
-    <div class="grid2">
-      <div>
-        <div class="section">Top Winners</div>
-        <table class="tbl">${{winners||'<tr><td style="color:var(--sub)">—</td></tr>'}}</table>
-      </div>
-      <div>
-        <div class="section">Top Losers</div>
-        <table class="tbl">${{losers||'<tr><td style="color:var(--sub)">—</td></tr>'}}</table>
-      </div>
-    </div>`;
-}}
-
-// ─── Universe ─────────────────────────────────────────────────────────────
-let univSortKey='rank', univSortAsc=true;
-function initUniverse() {{
-  window._init.univ = true;
-  const sel = document.getElementById('univSector');
-  const sectors = [...new Set(D.universe.map(r=>r.sector))].sort();
-  sel.innerHTML = '<option value="">All sectors</option>' + sectors.map(s=>`<option>${{s}}</option>`).join('');
-  filterUniv();
-}}
-
-function filterUniv() {{
-  const q  = document.getElementById('univSearch').value.toLowerCase();
-  const sec= document.getElementById('univSector').value;
-  const po = document.getElementById('univPortOnly').checked;
-  let rows = D.universe.filter(r => {{
-    if (po && !r.in_port) return false;
-    if (sec && r.sector !== sec) return false;
-    if (q && !(r.ticker.toLowerCase().includes(q) || r.sector.toLowerCase().includes(q))) return false;
-    return true;
-  }});
-  rows.sort((a,b) => {{
-    const av=a[univSortKey], bv=b[univSortKey];
-    if (typeof av==='string') return univSortAsc?av.localeCompare(bv):bv.localeCompare(av);
-    return univSortAsc ? av-bv : bv-av;
-  }});
-  const tb = document.getElementById('univBody');
-  tb.innerHTML = rows.map(r => `<tr class="${{r.in_port?'in-port':''}}">
-    <td style="color:var(--sub)">${{r.rank}}</td>
-    <td style="font-weight:600;cursor:pointer" onclick="goToStock('${{r.full}}')">
-      ${{r.ticker}} ${{r.in_port?'<span class=\\'badge badge-in\\'>IN</span>':''}}
-    </td>
-    <td><span class="badge badge-sec">${{r.sector}}</span></td>
-    <td class="mono" style="font-weight:700">${{r.score.toFixed(3)}}</td>
-    ${{r.ranks.map(x=>`<td><span class="pip r${{x}}">${{x}}</span></td>`).join('')}}
-  </tr>`).join('');
-  document.getElementById('univCount').textContent = `${{rows.length}} of ${{D.universe.length}}`;
-}}
-function sortUniv(k) {{
-  univSortAsc = (univSortKey===k) ? !univSortAsc : (k==='rank');
-  univSortKey = k;
-  filterUniv();
-}}
-
-// ─── Stocks (drill-down) ──────────────────────────────────────────────────
-let _stockChart1, _stockChart2;
-function initStocks() {{
-  window._init.stocks = true;
-  renderStockPills();
-  // Pre-select first portfolio stock if any
-  const first = Object.keys(D.stocks).find(t => D.stocks[t].in_port?.some(x=>x)) || Object.keys(D.stocks)[0];
-  if (first) showStock(first);
-}}
-
-function renderStockPills() {{
-  const q = (document.getElementById('stockSearch')?.value || '').toLowerCase();
-  const tickers = Object.keys(D.stocks).filter(t =>
-    !q || D.stocks[t].name.toLowerCase().includes(q) || (D.stocks[t].sector||'').toLowerCase().includes(q)
-  ).sort();
-  document.getElementById('stockPills').innerHTML =
-    tickers.map(t => `<span class="stock-pill" data-t="${{t}}" onclick="showStock('${{t}}')">${{D.stocks[t].name}}</span>`).join('');
-  document.getElementById('stockMeta').textContent = `${{tickers.length}} of ${{Object.keys(D.stocks).length}}`;
-}}
-function filterStockPills() {{ renderStockPills(); }}
-
-function showStock(tk) {{
-  const s = D.stocks[tk];
-  if (!s) return;
-  document.getElementById('stockBody').style.display='block';
-  document.querySelectorAll('.stock-pill').forEach(p =>
-    p.classList.toggle('active', p.dataset.t===tk));
-
-  if (_stockChart1) _stockChart1.destroy();
-  if (_stockChart2) _stockChart2.destroy();
-
-  _stockChart1 = new Chart(document.getElementById('cStockPx'), {{
-    type:'line', data:{{labels:s.price.labels,datasets:[
-      {{label:'Price',data:s.price.values,borderColor:'#378ADD',
-        backgroundColor:'rgba(55,138,221,.1)',fill:true,tension:.3,pointRadius:0,borderWidth:1.8}}
-    ]}},
-    options:{{responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{display:false}},
-        tooltip:{{callbacks:{{label:c=>`₹${{c.raw?.toFixed(2)}}`}}}}}},
-      scales:{{x:{{ticks:{{maxTicksLimit:12,font:{{size:9}}}},grid:{{display:false}}}},
-              y:{{grid:{{color:grid}},ticks:{{font:{{size:9}}}}}}}}}}
-  }});
-
-  _stockChart2 = new Chart(document.getElementById('cStockScore'), {{
-    type:'line', data:{{labels:s.score_hist.labels,datasets:[
-      {{label:'Final Score',data:s.score_hist.values,borderColor:'#1D9E75',
-        backgroundColor:'rgba(29,158,117,.15)',fill:true,tension:.3,pointRadius:3,borderWidth:1.8}}
-    ]}},
-    options:{{responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{display:false}},
-        tooltip:{{callbacks:{{label:c=>`Score: ${{c.raw?.toFixed(3)}}`}}}}}},
-      scales:{{x:{{ticks:{{maxTicksLimit:8,font:{{size:9}}}},grid:{{display:false}}}},
-              y:{{min:1,max:5,grid:{{color:grid}},ticks:{{font:{{size:9}}}}}}}}}}
-  }});
-
-  // Rank trajectory table
-  const rh = s.ranks_hist;
-  let rt = '<table class="tbl" style="font-size:11px"><thead><tr><th>Date</th>';
-  F.forEach(f => rt += `<th>${{f.slice(0,3)}}</th>`);
-  rt += '</tr></thead><tbody>';
-  rh.labels.forEach((d,i) => {{
-    rt += `<tr><td class="mono" style="color:var(--sub)">${{d}}</td>`;
-    F.forEach(f => {{
-      const v = (rh.ranks[f]||[])[i];
-      rt += `<td>${{v?`<span class="pip r${{v}}">${{v}}</span>`:'<span style="color:var(--sub)">—</span>'}}</td>`;
-    }});
-    rt += '</tr>';
-  }});
-  rt += '</tbody></table>';
-  document.getElementById('stockRankTable').innerHTML =
-    `<div style="font-size:12px;color:var(--sub);margin-bottom:6px">${{s.name}} · ${{s.sector}}</div>` + rt;
-
-  // In-portfolio timeline
-  let pt = '<div style="display:flex;gap:4px;flex-wrap:wrap">';
-  s.score_hist.labels.forEach((d,i) => {{
-    const inP = s.in_port[i];
-    const c = inP ? '#1D9E75' : '#3a3f50';
-    pt += `<div style="background:${{c}};color:white;font-size:10px;padding:3px 7px;border-radius:3px" title="${{d}}">${{d.slice(0,7)}}</div>`;
-  }});
-  pt += '</div>';
-  document.getElementById('stockPortTimeline').innerHTML = pt;
-}}
-
-function goToStock(full) {{
-  // Switch to Stocks tab and focus the chosen ticker
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
-  document.querySelector('.tab:nth-child(7)').classList.add('active');
-  document.getElementById('t-stocks').classList.add('active');
-  if (!window._init.stocks) initStocks();
-  showStock(full);
-}}
-
-// ─── Model tab ────────────────────────────────────────────────────────────
-function initModel() {{
-  window._init.model = true;
-  const FACT_DESC = {{
-    Momentum: ['Price persistence', 'Compounded return T-12 → T-2 with T-1 skipped. Captures the well-documented 6–12 month price-trend anomaly.'],
-    Quality:  ['Operating profit per ₹ of assets', 'Operating Profit ÷ Total Assets. High-quality firms generate more profit from each rupee invested in their balance sheet.'],
-    Value:    ['Cheapness', 'Book Equity ÷ Market Price. The Fama-French value factor — buy what is cheap relative to fundamentals.'],
-    Size:     ['Market capitalisation', 'Smaller companies historically outperform on a risk-adjusted basis (size effect). LOWER values = Rank 5.'],
-    Beta:     ['Market sensitivity', 'OLS slope of stock returns vs Nifty 50 returns over a rolling 36-month window. Higher = more aggressive.'],
-    Invest:   ['Conservative investment', 'YoY total-assets growth. The investment factor: firms that *don\\'t* over-invest tend to outperform. LOWER values = Rank 5.'],
-    Yield:    ['Cash returned to shareholders', 'EPS × payout%, ÷ price. A "cash-flow discipline" filter on the high-momentum tilt.'],
-  }};
-  let h='';
-  F.forEach((f,i) => {{
-    const [tag, desc] = FACT_DESC[f];
-    const w = (D.weights[f]*100).toFixed(0);
-    const lower = D.lower_better.includes(f);
-    h += `<div class="fact-card">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <span class="fact-name">${{f}}</span>
-          <span class="badge badge-info" style="margin-left:8px">${{w}}%</span>
-          ${{lower?'<span class="badge badge-warn" style="margin-left:4px">LOWER better</span>':''}}
-        </div>
-        <span style="color:${{F_COLORS[i]}};font-size:18px;font-weight:700;font-family:JetBrains Mono,monospace">${{w}}%</span>
-      </div>
-      <div class="fact-meta">${{tag}}</div>
-      <div class="fact-desc">${{desc}}</div>
-    </div>`;
-  }});
-  document.getElementById('factorList').innerHTML = h;
-
-  new Chart(document.getElementById('cWeights'), {{
-    type:'doughnut', data:{{labels:F,datasets:[
-      {{data:F.map(f=>D.weights[f]*100),backgroundColor:F_COLORS,borderWidth:0}}
-    ]}},
-    options:{{responsive:true,maintainAspectRatio:false,cutout:'55%',
-      plugins:{{legend:{{position:'right',labels:{{font:{{size:11}},boxWidth:10}}}},
-        tooltip:{{callbacks:{{label:c=>`${{c.label}}: ${{c.raw}}%`}}}}}}}}
-  }});
-}}
-
-// Init the default tab
-initOverview();
+}}).mount('#app');
 </script>
-</body></html>
-"""
+</body>
+</html>"""

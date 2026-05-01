@@ -10,7 +10,11 @@ NIFTY_TICKER     = "^NSEI"
 INCEPTION_DATE   = date(2020, 2, 1)
 BACKTEST_START   = INCEPTION_DATE
 BACKTEST_END     = date(2026, 4, 1)
-REBALANCE_MONTHS = [3, 9]    # June + December (after the Feb 2020 inception)
+REBALANCE_MONTHS = [3, 9]    # March + September — aligned with NSE 200 reconstitution
+# Skip any scheduled rebalance closer than this many months to inception.
+# Prevents the back-to-back Feb 1 + Mar 1 trade observed in the previous run
+# (₹2,174 wasted on inception trickery).
+MIN_MONTHS_AFTER_INCEPTION = 4
 
 WEIGHTS = {
     "Momentum": 0.30, "Quality": 0.20, "Value": 0.15,
@@ -29,7 +33,6 @@ TRANSACTION_COST_PCT = 0.003
 RISK_FREE_RATE       = 0.065
 
 PRICE_CSV = "prices.csv"
-FUND_CSV  = "fundamentals.csv"
 
 # Warn if the cached price file is older than this many days.
 CACHE_MAX_AGE_DAYS = 30

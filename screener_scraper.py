@@ -12,62 +12,98 @@ import io  # <-- New Import
 def clean_ticker(ticker):
     return ticker.replace('.NS', '')
 
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
+
+
+def _find_pl_bs(tables):
+    """
+    Detect (pl_table, bs_table) from a list of pandas-parsed tables.
+    Broadened from the original to handle:
+      - Banks (Financing Profit instead of Operating Profit)
+      - NBFCs / insurers (different BS labels — Deposits, Borrowings)
+      - Standalone-only companies whose BS uses "Equity Share Capital"
+    Returns (pl_or_None, bs_or_None).
+    """
+    pl_table = None
+    bs_table = None
+    for df in tables:
+        if df.shape[1] < 3:
+            continue
+        col0 = df.iloc[:, 0].astype(str).str.lower()
+
+        # P&L: any of these income/profit tags + net profit on a row.
+        if (col0.str.contains(
+                r'operating profit|financing profit|gross profit|revenue|sales',
+                regex=True).any()
+            and col0.str.contains(r'net profit', regex=True).any()):
+            pl_table = df
+
+        # BS: "total assets" plus ANY equity-side or liability-side marker.
+        # Old criterion required share/equity capital — too strict for banks
+        # whose Screener BS leads with "Deposits" / "Borrowings".
+        has_total_assets = col0.str.contains(r'total assets', regex=True).any()
+        has_equity_or_liab = col0.str.contains(
+            r'share capital|equity capital|equity share capital'
+            r'|reserves|borrowings|deposits|total liab',
+            regex=True).any()
+        if has_total_assets and has_equity_or_liab:
+            bs_table = df
+
+    return pl_table, bs_table
+
+
+def _try_url(url):
+    """Fetch and parse tables. Returns (tables_list_or_None, status_code)."""
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        if r.status_code != 200:
+            return None, r.status_code
+        return pd.read_html(io.StringIO(r.text)), 200
+    except Exception:
+        return None, -1
+
+
 def scrape_screener_fundamentals(ticker):
     clean_sym = clean_ticker(ticker)
-    url = f"https://www.screener.in/company/{clean_sym}/consolidated/"
-    
-    # Robust User-Agent to prevent 403 Forbidden blocks
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            print(f" ❌ Blocked/Not Found (HTTP {response.status_code})")
-            return None
-            
-        # THE FIX: Wrap the raw HTML in io.StringIO()
-        tables = pd.read_html(io.StringIO(response.text))
-        
-        pl_table = None
-        bs_table = None
-        
-        for df in tables:
-            # Convert first column to lowercase string for fuzzy matching
-            col0 = df.iloc[:, 0].astype(str).str.lower()
-            
-            # Identify P&L Table (Matches Manufacturing, IT, and Banking)
-            if col0.str.contains('operating profit|financing profit|gross profit|revenue', regex=True).any() and col0.str.contains('net profit').any():
-                pl_table = df
-                
-            # Identify Balance Sheet Table
-            if col0.str.contains('total assets').any() and col0.str.contains('share capital|equity capital').any():
-                bs_table = df
-                
-        if pl_table is None or bs_table is None:
-            print(f" ❌ Missing Tables (P&L Found: {pl_table is not None}, BS Found: {bs_table is not None})")
-            return None
-            
-        # Clean and Transpose P&L
-        pl_table = pl_table.set_index(pl_table.columns[0]).T
-        pl_table.index.name = 'Period'
-        
-        # Clean and Transpose BS
-        bs_table = bs_table.set_index(bs_table.columns[0]).T
-        bs_table.index.name = 'Period'
-        
-        # Merge them
-        merged = pl_table.join(bs_table, how='inner')
-        merged['Ticker'] = ticker
-        
-        print(" ✅ Success")
-        return merged.reset_index()
-        
-    except Exception as e:
-        print(f" ❌ Error: {str(e)[:50]}")
-        return None
+
+    # Try the consolidated page first (most companies); fall back to the
+    # standalone page when consolidated is missing or its tables are partial.
+    sources = [
+        f"https://www.screener.in/company/{clean_sym}/consolidated/",
+        f"https://www.screener.in/company/{clean_sym}/",
+    ]
+
+    last_status = None
+    for url in sources:
+        tables, status = _try_url(url)
+        last_status = status
+        if tables is None:
+            continue
+        pl_table, bs_table = _find_pl_bs(tables)
+        if pl_table is not None and bs_table is not None:
+            try:
+                pl_table = pl_table.set_index(pl_table.columns[0]).T
+                pl_table.index.name = 'Period'
+                bs_table = bs_table.set_index(bs_table.columns[0]).T
+                bs_table.index.name = 'Period'
+                merged = pl_table.join(bs_table, how='inner')
+                merged['Ticker'] = ticker
+                tag = "consolidated" if "consolidated" in url else "standalone"
+                print(f" ✅ Success ({tag})")
+                return merged.reset_index()
+            except Exception as e:
+                print(f" ❌ Merge error: {str(e)[:50]}")
+                return None
+
+    # Both URLs failed.
+    if last_status and last_status != 200:
+        print(f" ❌ Blocked/Not Found (HTTP {last_status})")
+    else:
+        print(f" ❌ Missing Tables (couldn't find P&L+BS in either consolidated or standalone)")
+    return None
 
 if __name__ == "__main__":
     from nse200_tickers import NSE200

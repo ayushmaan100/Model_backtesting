@@ -26,12 +26,11 @@
 
 import pandas as pd
 import numpy as np
-from datetime import date
 
 from config import (
     BACKTEST_START, BACKTEST_END, REBALANCE_MONTHS,
     INCEPTION_DATE, PORTFOLIO_SIZE, TRANSACTION_COST_PCT,
-    RISK_FREE_RATE, NIFTY_TICKER,
+    RISK_FREE_RATE, NIFTY_TICKER, MIN_MONTHS_AFTER_INCEPTION,
 )
 from factor_engine import run_factor_engine
 
@@ -63,14 +62,18 @@ def get_rebalance_dates(prices_df: pd.DataFrame) -> list:
         return []
     inception_actual = candidates[0]
 
+    # C6 fix: enforce a minimum holding period after inception so the next
+    # scheduled rebal-month (e.g. Mar 1 right after Feb 1 inception) is skipped.
+    cutoff = inception_actual + pd.DateOffset(months=MIN_MONTHS_AFTER_INCEPTION)
+
     rebalance = [inception_actual]
     for dt in available:
-        if (dt > inception_actual
+        if (dt >= cutoff
                 and dt <= end_target
                 and dt.month in REBALANCE_MONTHS):
             rebalance.append(dt)
 
-    # Dedup (in case inception happens to land on a Jun/Dec) and sort
+    # Dedup (in case inception happens to land on a rebal month) and sort
     return sorted(set(rebalance))
 
 
@@ -283,9 +286,19 @@ def run_backtest(
         # ── A. Score stocks using only data available at rebal_date ─────
         prices_to_date = prices_df[prices_df.index <= rebal_date]
         
-        # Determine active universe map date
-        available_univ_dates = [d for d in universe_map.keys() if d <= rebal_date]
-        active_universe = universe_map[max(available_univ_dates)] if available_univ_dates else None
+        # Determine active universe snapshot for this rebal date.
+        # Preferred: latest snapshot ≤ rebal_date (true point-in-time).
+        # Fallback (C5 fix): if none exists (i.e. backtest starts BEFORE the
+        # earliest available reconstitution), fall FORWARD to the earliest
+        # available snapshot. Acceptable because Nifty 200 constituents are
+        # ~95% stable quarter-on-quarter; the earlier alternative (no mask
+        # at all → 264 stocks) was strictly worse.
+        prior_dates = [d for d in universe_map.keys() if d <= rebal_date]
+        if prior_dates:
+            active_universe = universe_map[max(prior_dates)]
+        else:
+            future_dates = sorted(universe_map.keys())
+            active_universe = universe_map[future_dates[0]] if future_dates else None
 
         # PiT slicing is handled inside factor_engine.compute_raw_metrics()
         # We pass the full fund_df; factor_engine uses get_pit_snapshot()
