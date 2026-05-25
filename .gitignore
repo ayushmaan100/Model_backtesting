@@ -8,3 +8,9 @@ output/
 
 # Universe builder raw downloads (re-fetchable from niftyindices.com)
 data/universe/*.zip
+
+# Cached data files (auto-generated, re-downloadable)
+prices.csv
+screener_raw.csv
+fundamentals_pit.csv
+shares_outstanding.csv

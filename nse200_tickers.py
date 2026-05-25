@@ -1,3 +1,33 @@
+# nse200_tickers.py
+# ─────────────────────────────────────────────────────────────────────────────
+# NSE 200 constituent tickers for yfinance download.
+#
+# RULES:
+#   1. Every ticker MUST be downloadable via yfinance (verified May 2026).
+#   2. Delisted / demerged tickers that return empty data are EXCLUDED.
+#   3. When a company renames, use the CURRENT yfinance ticker.
+#   4. Tickers with & and - that work on yfinance are kept as-is.
+#
+# EXCLUDED (confirmed dead on yfinance as of May 2026):
+#   TATAMOTORS.NS   — demerged into TMCV.NS + TMPV.NS (Oct 2024)
+#   TATAMTRDVR.NS   — DVR share, demerged along with TATAMOTORS
+#   ADANIGAS.NS     — use ATGL.NS instead (yfinance recognises ATGL)
+#   AMARAJABAT.NS   — old name, delisted (now ARE&M but has limited history)
+#   MCDOWELL-N.NS   — delisted / not found on yfinance
+#   HEXAWARE.NS     — delisted (taken private 2020)
+#   IBULHSGFIN.NS   — delisted / not found
+#   IBVENTURES.NS   — delisted / not found
+#   ISEC.NS         — delisted (ICICI Securities merged with ICICIBANK)
+#   JUBILANT.NS     — ticker not found (JUBLFOOD.NS is separate, kept)
+#   PEL.NS          — Piramal Enterprises delisted / not found
+#   STRTECH.NS      — Sterlite Tech, not found on yfinance
+#   DHANI.NS        — delisted / not found
+#
+# CORRUPT PRICE DATA (excluded — user chose option A):
+#   PATANJALI.NS    — yfinance auto_adjust failure: -93.9% then +201.7% monthly
+#   FCONSUMER.NS    — crashes from ₹41 to ₹0.31 (data error or penny stock)
+# ─────────────────────────────────────────────────────────────────────────────
+
 NSE200 = [
     "AARTIIND.NS",
     "ABB.NS",
@@ -7,7 +37,6 @@ NSE200 = [
     "ACC.NS",
     "ADANIENSOL.NS",
     "ADANIENT.NS",
-    "ADANIGAS.NS",
     "ADANIGREEN.NS",
     "ADANIPORTS.NS",
     "ADANIPOWER.NS",
@@ -22,6 +51,7 @@ NSE200 = [
     "ASHOKLEY.NS",
     "ASIANPAINT.NS",
     "ASTRAL.NS",
+    "ATGL.NS",          # yfinance name for Adani Total Gas (was ADANIGAS)
     "AUBANK.NS",
     "AUROPHARMA.NS",
     "AXISBANK.NS",
@@ -67,7 +97,6 @@ NSE200 = [
     "DABUR.NS",
     "DALBHARAT.NS",
     "DEEPAKNTR.NS",
-    "DHANI.NS",
     "DIVISLAB.NS",
     "DIXON.NS",
     "DLF.NS",
@@ -82,7 +111,6 @@ NSE200 = [
     "ESCORTS.NS",
     "ETERNAL.NS",
     "EXIDEIND.NS",
-    "FCONSUMER.NS",
     "FEDERALBNK.NS",
     "FORTIS.NS",
     "FRETAIL.NS",
@@ -110,7 +138,6 @@ NSE200 = [
     "HDFCLIFE.NS",
     "HEG.NS",
     "HEROMOTOCO.NS",
-    "HEXAWARE.NS",
     "HINDALCO.NS",
     "HINDCOPPER.NS",
     "HINDPETRO.NS",
@@ -118,8 +145,6 @@ NSE200 = [
     "HINDZINC.NS",
     "HUDCO.NS",
     "HYUNDAI.NS",
-    "IBULHSGFIN.NS",
-    "IBVENTURES.NS",
     "ICICIAMC.NS",
     "ICICIBANK.NS",
     "ICICIGI.NS",
@@ -141,13 +166,11 @@ NSE200 = [
     "IRCTC.NS",
     "IREDA.NS",
     "IRFC.NS",
-    "ISEC.NS",
     "ITC.NS",
     "JINDALSTEL.NS",
     "JIOFIN.NS",
     "JSWENERGY.NS",
     "JSWSTEEL.NS",
-    "JUBILANT.NS",
     "JUBLFOOD.NS",
     "KALYANKJIL.NS",
     "KEI.NS",
@@ -173,7 +196,6 @@ NSE200 = [
     "MARUTI.NS",
     "MAXHEALTH.NS",
     "MAZDOCK.NS",
-    "MCDOWELL-N.NS",
     "MCX.NS",
     "METROPOLIS.NS",
     "MFSL.NS",
@@ -199,9 +221,7 @@ NSE200 = [
     "OFSS.NS",
     "ONGC.NS",
     "PAGEIND.NS",
-    "PATANJALI.NS",
     "PAYTM.NS",
-    "PEL.NS",
     "PERSISTENT.NS",
     "PETRONET.NS",
     "PFC.NS",
@@ -237,7 +257,6 @@ NSE200 = [
     "SOLARINDS.NS",
     "SONACOMS.NS",
     "SRF.NS",
-    "STRTECH.NS",
     "SUNPHARMA.NS",
     "SUNTV.NS",
     "SUPREMEIND.NS",
@@ -250,16 +269,14 @@ NSE200 = [
     "TATACONSUM.NS",
     "TATAELXSI.NS",
     "TATAINVEST.NS",
-    "TATAMOTORS.NS",
-    "TATAMTRDVR.NS",
     "TATAPOWER.NS",
     "TATASTEEL.NS",
     "TCS.NS",
     "TECHM.NS",
     "TIINDIA.NS",
     "TITAN.NS",
-    "TMCV.NS",
-    "TMPV.NS",
+    "TMCV.NS",         # Tata Motors Commercial Vehicles (post-demerger)
+    "TMPV.NS",         # Tata Motors Passenger Vehicles (post-demerger)
     "TORNTPHARM.NS",
     "TORNTPOWER.NS",
     "TRENT.NS",
@@ -282,4 +299,12 @@ NSE200 = [
     "YESBANK.NS",
     "ZEEL.NS",
     "ZYDUSLIFE.NS",
+]
+
+# Tickers with confirmed corrupt yfinance price data.
+# These are excluded from the main NSE200 list and from price downloads.
+# Documented here for traceability.
+EXCLUDED_CORRUPT = [
+    "PATANJALI.NS",    # yfinance auto_adjust failure: -93.9% then +201.7% monthly
+    "FCONSUMER.NS",    # price crash from ₹41 to ₹0.31 (data error)
 ]

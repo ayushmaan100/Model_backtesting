@@ -4,11 +4,6 @@ import time
 import os
 import io
 
-import requests
-import pandas as pd
-import time
-import io  # <-- New Import
-
 def clean_ticker(ticker):
     return ticker.replace('.NS', '')
 

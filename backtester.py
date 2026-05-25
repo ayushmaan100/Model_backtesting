@@ -325,6 +325,25 @@ def run_backtest(
             new_portfolio = current_portfolio
             universe_size = 0
 
+        if not new_portfolio:
+            print(f" {str(rebal_date.date()):<14}  ⚠️ empty portfolio — skipping")
+            continue
+
+        # Log filter stats if available (PiT dynamic universe diagnostics)
+        if hasattr(scored_df, 'attrs') and '_filter_stats' in getattr(scored_df, 'attrs', {}):
+            fs = scored_df.attrs['_filter_stats']
+            log_parts = []
+            if 'stale_removed' in fs and fs['stale_removed'] > 0:
+                log_parts.append(f"stale={fs['stale_removed']}")
+            if 'small_removed' in fs and fs['small_removed'] > 0:
+                log_parts.append(f"small={fs['small_removed']}")
+            if 'data_poor_dropped' in fs and fs['data_poor_dropped'] > 0:
+                log_parts.append(f"data_poor={fs['data_poor_dropped']}")
+            if log_parts:
+                import logging
+                logging.getLogger(__name__).info(
+                    f"Rebal {rebal_date.date()}: filtered out {', '.join(log_parts)}")
+
         # ── B. Transaction costs ────────────────────────────────────────
         # Cost model: cost_pct is charged on each side (buy AND sell).
         # One-way turnover = ½·Σ|Δw|; round-trip cost = turnover × pct × 2.

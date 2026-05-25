@@ -38,7 +38,7 @@ import os
 import logging
 
 from config import NIFTY_TICKER, PRICE_CSV, BACKTEST_END, CACHE_MAX_AGE_DAYS
-from nse200_tickers import NSE200
+from nse200_tickers import NSE200, EXCLUDED_CORRUPT
 
 log = logging.getLogger(__name__)
 
@@ -313,11 +313,59 @@ def _print_validation_report(issues: dict):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PRICE SANITY FILTER — removes tickers with corrupt yfinance data
+# ─────────────────────────────────────────────────────────────────────────────
+
+def filter_corrupt_prices(df: pd.DataFrame, max_monthly_gain: float = 3.0,
+                          max_monthly_loss: float = -0.90) -> pd.DataFrame:
+    """
+    Remove tickers with impossible monthly returns that indicate yfinance
+    auto_adjust failures (e.g., PATANJALI.NS showing -93.9% then +201.7%).
+
+    Also removes any tickers explicitly listed in EXCLUDED_CORRUPT.
+
+    Args:
+        max_monthly_gain: reject if any month's return > this (3.0 = +300%)
+        max_monthly_loss: reject if any month's return < this (-0.90 = -90%)
+
+    Returns:
+        Cleaned DataFrame with corrupt tickers dropped.
+    """
+    stock_cols = [c for c in df.columns if c != NIFTY_TICKER]
+    rets = df[stock_cols].pct_change()
+    corrupt = set()
+
+    for col in stock_cols:
+        col_rets = rets[col].dropna()
+        if col_rets.empty:
+            continue
+        if col_rets.max() > max_monthly_gain or col_rets.min() < max_monthly_loss:
+            corrupt.add(col)
+
+    # Also exclude explicitly-listed corrupt tickers
+    for t in EXCLUDED_CORRUPT:
+        if t in df.columns:
+            corrupt.add(t)
+
+    if corrupt:
+        log.warning(
+            f"Excluding {len(corrupt)} tickers with corrupt price data: "
+            f"{sorted(corrupt)}"
+        )
+        df = df.drop(columns=list(corrupt), errors='ignore')
+
+    return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # FETCH PRICES (yf.download — most reliable endpoint)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def fetch_prices(tickers: list, start: str = "2019-01-01") -> pd.DataFrame:
     import yfinance as yf
+
+    # Remove known-corrupt tickers before downloading
+    tickers = [t for t in tickers if t not in EXCLUDED_CORRUPT]
 
     all_tickers = tickers + [NIFTY_TICKER]
     prices, failed = {}, []
@@ -352,9 +400,17 @@ def fetch_prices(tickers: list, start: str = "2019-01-01") -> pd.DataFrame:
 
     df = pd.DataFrame(prices).sort_index()
     df.index = pd.DatetimeIndex(df.index)
-    n_stocks = len([c for c in df.columns if c != NIFTY_TICKER])
-    print(f"\n[Prices] ✅ {n_stocks} stocks + Nifty 50 | "
-          f"{len(df)} months | {len(failed)} failed")
+    # Drop rows that are completely NaN (e.g. yfinance returning a partial current date row)
+    df = df.dropna(how='all')
+
+    # Post-download validation: remove tickers with corrupt price data
+    n_before = len([c for c in df.columns if c != NIFTY_TICKER])
+    df = filter_corrupt_prices(df)
+    n_after = len([c for c in df.columns if c != NIFTY_TICKER])
+    n_corrupt = n_before - n_after
+
+    print(f"\n[Prices] ✅ {n_after} stocks + Nifty 50 | "
+          f"{len(df)} months | {len(failed)} failed | {n_corrupt} corrupt removed")
     if failed:
         print(f"  Failed: {failed}")
     df.to_csv(PRICE_CSV)
@@ -444,30 +500,39 @@ def get_pit_snapshot(pit_df: pd.DataFrame, prices_df: pd.DataFrame,
     # Quality: already computed in PiT
     snapshot['gross_profit_assets'] = latest.loc[common_tickers, 'gross_profit_assets']
 
-    # Value: Book-to-Market = Equity / Price (cross-sectional rank proxy)
-    equity = latest.loc[common_tickers, 'equity']
+    # ── Size: market cap = Price × Shares Outstanding ──────────────────
+    # Must compute market cap BEFORE book-to-market, since B/M = Equity / MCap.
     price = latest_prices.reindex(common_tickers)
-    snapshot['book_to_market'] = equity.values / price.values
-    snapshot.loc[price.values <= 0, 'book_to_market'] = np.nan
-
-    # Size: TRUE market cap when shares-outstanding cache is present;
-    # otherwise fall back to total_assets (the old proxy) and warn once.
     shares = load_shares_outstanding()
     if not shares.empty:
+        # load_shares_outstanding returns a Series now!
         sh_aligned = shares.reindex(common_tickers)
-        mcap = price.values * sh_aligned.values   # both crores; price in ₹
-        # Where shares are missing, fall back to total_assets so the row isn't dropped.
-        ta_fallback = latest.loc[common_tickers, 'total_assets'].values
+        mcap = price.values * sh_aligned.values   # both 1D arrays
+        # Where shares are missing, use NaN — let rank_quintiles assign Rank 3.
+        # Previously fell back to total_assets, which for banks can be 10-20x
+        # actual market cap and distorts the Size ranking.
         snapshot['market_cap_cr'] = np.where(
-            np.isnan(mcap) | (sh_aligned.values <= 0), ta_fallback, mcap
+            np.isnan(mcap) | (sh_aligned.values <= 0), np.nan, mcap
         )
         snapshot.attrs['_size_source'] = (
             f"true_mcap ({sh_aligned.notna().sum()}/{len(common_tickers)}) "
-            f"+ total_assets fallback"
+            f"+ NaN fallback"
         )
     else:
-        snapshot['market_cap_cr'] = latest.loc[common_tickers, 'total_assets'].values
-        snapshot.attrs['_size_source'] = "total_assets (no shares cache)"
+        # No shares cache at all — market cap is unknown. Use NaN.
+        snapshot['market_cap_cr'] = np.nan
+        snapshot.attrs['_size_source'] = "NaN (no shares cache)"
+
+    # ── Value: Book-to-Market = Equity / Market Cap ───────────────────
+    # CRITICAL FIX: Previously this divided equity (₹ Crores) by per-share
+    # price (₹), producing nonsensical B/M values of 100-700+ instead of
+    # the correct ~0.1-5.0 range. Now uses equity / market_cap, both in ₹ Cr.
+    equity = latest.loc[common_tickers, 'equity']
+    mcap_for_btm = snapshot['market_cap_cr'].values
+    with np.errstate(divide='ignore', invalid='ignore'):
+        btm = equity.values / mcap_for_btm
+    btm = np.where((mcap_for_btm <= 0) | np.isnan(mcap_for_btm), np.nan, btm)
+    snapshot['book_to_market'] = btm
 
     # Invest: YoY Asset Growth (already computed in PiT)
     snapshot['asset_growth_yoy'] = latest.loc[common_tickers, 'asset_growth_yoy'].values
@@ -475,12 +540,12 @@ def get_pit_snapshot(pit_df: pd.DataFrame, prices_df: pd.DataFrame,
     # Yield: Dividend Yield = (EPS × Payout%) / Price
     eps = latest.loc[common_tickers, 'eps'].values if 'eps' in latest.columns else np.nan
     payout = latest.loc[common_tickers, 'dividend_payout_pct'].values if 'dividend_payout_pct' in latest.columns else np.nan
-    eps = pd.to_numeric(pd.Series(eps), errors='coerce').values
-    payout = pd.to_numeric(pd.Series(payout), errors='coerce').values
+    eps_vals = pd.to_numeric(pd.Series(eps), errors='coerce').values
+    payout_vals = pd.to_numeric(pd.Series(payout), errors='coerce').values
     price_vals = price.values
 
     with np.errstate(divide='ignore', invalid='ignore'):
-        dps = eps * (payout / 100.0)
+        dps = eps_vals * (payout_vals / 100.0)
         div_yield = np.where(price_vals > 0, dps / price_vals * 100, np.nan)
     # Preserve NaN for missing payout/EPS — rank_quintiles() will assign Rank 3 (neutral).
     # Previously we filled with 0, which incorrectly punished data-incomplete names
@@ -489,7 +554,7 @@ def get_pit_snapshot(pit_df: pd.DataFrame, prices_df: pd.DataFrame,
 
     # ── 6. Clean up ───────────────────────────────────────────────────────
     snapshot['gross_profit_assets'] = snapshot['gross_profit_assets'].clip(-1.0, 2.0)
-    snapshot['book_to_market'] = snapshot['book_to_market'].clip(0.001, 1e6)
+    snapshot['book_to_market'] = snapshot['book_to_market'].clip(0.001, 50.0)
     snapshot['market_cap_cr'] = snapshot['market_cap_cr'].clip(10.0, 2e7)
     snapshot['asset_growth_yoy'] = snapshot['asset_growth_yoy'].clip(-0.80, 3.0)
 
@@ -527,6 +592,8 @@ def fetch_real_data():
         if stale:
             print(f"        delete {PRICE_CSV} to force a fresh download")
         prices = pd.read_csv(PRICE_CSV, index_col=0, parse_dates=True)
+        # Apply corrupt-price filter even on cached data
+        prices = filter_corrupt_prices(prices)
     else:
         tickers = NSE200
         prices = fetch_prices(tickers)

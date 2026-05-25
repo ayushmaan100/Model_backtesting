@@ -94,7 +94,24 @@ def build_pit_database(raw_csv_path="screener_raw.csv", output_path="fundamental
     else:
         pit['eps'] = np.nan
 
-    # ── 5. Clean and save ─────────────────────────────────────────────────
+    # ── 5. Sanity checks ──────────────────────────────────────────────────
+    # Flag extreme values that likely indicate data issues
+    n_extreme_gpa = (pit['gross_profit_assets'].abs() > 2.0).sum()
+    if n_extreme_gpa > 0:
+        print(f"  ⚠️  {n_extreme_gpa} rows with |gross_profit_assets| > 2.0 (clipped)")
+        pit['gross_profit_assets'] = pit['gross_profit_assets'].clip(-1.0, 2.0)
+
+    n_extreme_ag = (pit['asset_growth_yoy'].abs() > 2.0).sum()
+    if n_extreme_ag > 0:
+        print(f"  ⚠️  {n_extreme_ag} rows with |asset_growth_yoy| > 200% (likely M&A, kept but logged)")
+
+    n_neg_ta = (pit['total_assets'] <= 0).sum()
+    if n_neg_ta > 0:
+        print(f"  ⚠️  {n_neg_ta} rows with total_assets <= 0 (set to NaN)")
+        pit.loc[pit['total_assets'] <= 0, 'total_assets'] = np.nan
+        pit.loc[pit['total_assets'].isna(), 'gross_profit_assets'] = np.nan
+
+    # ── 6. Clean and save ─────────────────────────────────────────────────
     pit = pit.sort_values(['Date', 'Ticker'])
     pit.to_csv(output_path, index=False)
 

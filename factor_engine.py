@@ -113,8 +113,11 @@ def compute_rolling_betas(prices_to_date: pd.DataFrame, window: int = 36) -> pd.
     if NIFTY_TICKER not in prices_to_date.columns:
         return pd.Series(1.0, index=[c for c in prices_to_date.columns if c != NIFTY_TICKER])
 
-    # Extract the trailing window of logarithmic returns
-    rets = np.log(prices_to_date / prices_to_date.shift(1)).dropna().tail(window)
+    # Compute log returns WITHOUT dropping NaN rows globally.
+    # The old code used .dropna() which dropped rows where ANY of 260+ stocks
+    # had NaN — leaving only ~11 rows, so every stock fell below the 12-month
+    # threshold and got beta=1.0 (making the Beta factor useless).
+    rets = np.log(prices_to_date / prices_to_date.shift(1)).tail(window)
     nifty = rets[NIFTY_TICKER].values
     
     betas = {}
